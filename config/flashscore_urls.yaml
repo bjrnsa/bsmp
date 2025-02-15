@@ -1,0 +1,81 @@
+- league: "https://www.flashscore.com/handball/denmark/herre-handbold-ligaen"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+    # - 2018
+  sport: "handball"
+
+- league: "https://www.flashscore.com/handball/denmark/1-division"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+    # - 2018
+  sport: "handball"
+
+- league: "https://www.flashscore.com/handball/austria/hla"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+    # - 2018
+  sport: "handball"
+
+- league: "https://www.flashscore.com/handball/france/starligue"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+  sport: "handball"  
+
+- league: "https://www.flashscore.com/handball/germany/bundesliga"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+  sport: "handball"  
+
+- league: "https://www.flashscore.com/handball/denmark/kvindeligaen-women"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+    # - 2018
+  sport: "handball"
+
+- league: "https://www.flashscore.com/handball/spain/liga-asobal"
+  seasons: 
+    - 2025
+    # - 2024
+    # - 2023
+    # - 2022
+    # - 2021
+    # - 2020
+    # - 2019
+    # - 2018
+  sport: "handball"  
