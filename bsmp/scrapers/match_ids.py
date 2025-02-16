@@ -13,8 +13,8 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from tqdm import tqdm
 
-from src.scrapers.core.browser import BrowserManager
-from src.scrapers.core.database import DatabaseManager
+from bsmp.scrapers.core.browser import BrowserManager
+from bsmp.scrapers.core.database import DatabaseManager
 
 
 class MatchIDScraper:

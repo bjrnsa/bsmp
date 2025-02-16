@@ -1,0 +1,29 @@
+[project]
+name = "bsmp"
+version = "0.0.1"
+description = ""
+authors = [
+    {name = "Bjoern Aagaard"}
+]
+readme = "README.md"
+dependencies = [
+    "arviz>=0.20.0",
+    "beautifulsoup4>=4.13.3",
+    "cmdstanpy>=1.2.5",
+    "ipykernel>=6.29.5",
+    "ipywidgets>=8.1.5",
+    "jupyter>=1.1.1",
+    "numpy>=2.2.3",
+    "pandas>=2.2.3",
+    "pip>=25.0.1",
+    "plotly>=6.0.0",
+    "scipy>=1.15.1",
+    "seaborn>=0.13.2",
+    "selenium>=4.28.1",
+]
+package-mode = true 
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+

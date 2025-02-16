@@ -5,8 +5,8 @@ from typing import Iterator, List, Tuple
 from bs4 import BeautifulSoup, Tag
 from tqdm import tqdm
 
-from src.scrapers.core.browser import BrowserManager
-from src.scrapers.core.database import DatabaseManager
+from bsmp.scrapers.core.browser import BrowserManager
+from bsmp.scrapers.core.database import DatabaseManager
 
 
 class OddsDataScraper:

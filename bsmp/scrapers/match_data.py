@@ -5,8 +5,8 @@ from typing import List, Optional, Tuple
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
-from src.scrapers.core.browser import BrowserManager
-from src.scrapers.core.database import DatabaseManager
+from bsmp.scrapers.core.browser import BrowserManager
+from bsmp.scrapers.core.database import DatabaseManager
 
 
 class MatchDataScraper:
