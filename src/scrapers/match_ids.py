@@ -20,15 +20,16 @@ from src.scrapers.core.database import DatabaseManager
 class MatchIDScraper:
     """Scrapes match IDs from FlashScore and stores them in a database."""
 
+    NETWORK_DELAY = 5
+    DEFAULT_BATCH_SIZE = 100
+
     def __init__(
         self,
         config_path: Path = Path("config/flashscore_urls.yaml"),
-        db_path: str = "data/processed/database.db",
-        wait_time: int = 3,
+        db_path: str = "database/database.db",
     ):
         self.config_path = config_path
         self.db_path = db_path
-        self.wait_time = wait_time
         self._validate_paths()
 
     def _validate_paths(self) -> None:
@@ -59,11 +60,12 @@ class MatchIDScraper:
         try:
             while True:
                 self._scroll_to_bottom(driver)
-                button = WebDriverWait(driver, self.wait_time).until(
+                button = WebDriverWait(driver, self.NETWORK_DELAY).until(
                     EC.element_to_be_clickable((By.CLASS_NAME, "event__more--static"))
                 )
+                time.sleep(self.NETWORK_DELAY)
                 button.click()
-                time.sleep(self.wait_time)
+
         except (TimeoutException, ElementClickInterceptedException):
             pass
 
@@ -97,8 +99,8 @@ class MatchIDScraper:
             try:
                 league_ids = self._extract_ids(browser, url)
                 new_ids.update(league_ids - existing_ids)
-            except Exception as e:
-                print(f"Error processing {url}: {str(e)}")
+            except Exception:
+                pass
 
         with DatabaseManager(self.db_path) as cursor:
             cursor.executemany(
@@ -109,7 +111,8 @@ class MatchIDScraper:
         return len(new_ids)
 
 
+# Usage example
 if __name__ == "__main__":
-    scraper = MatchIDScraper()
-    count = scraper.scrape(headless=False)
+    id_scraper = MatchIDScraper()
+    count = id_scraper.scrape()
     print(f"Scraping complete. New entries: {count}")

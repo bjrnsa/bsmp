@@ -12,12 +12,14 @@ from src.scrapers.core.database import DatabaseManager
 class MatchDataScraper:
     """Scrapes detailed match data and stores it in a structured format."""
 
-    URL_PREFIX = "https://www.flashscore.com/match/"
+    BASE_URL = "https://www.flashscore.com/match/"
+    NETWORK_DELAY = 2
+    DEFAULT_BATCH_SIZE = 100
 
     def __init__(
         self,
         config_path: Path = Path("config/flashscore_urls.yaml"),
-        db_path: str = "data/processed/database.db",
+        db_path: str = "database/database.db",
     ):
         self.config_path = config_path
         self.db_path = db_path
@@ -54,18 +56,19 @@ class MatchDataScraper:
         try:
             # Extract all period score elements
             periods = soup.find_all(class_="smh__part")
-            home_scores = self._parse_period_scores(periods[::2])  # Even indices
-            away_scores = self._parse_period_scores(periods[1::2])  # Odd indices
+            home_scores = self._parse_period_scores(periods[:3])  # Even indices
+            away_scores = self._parse_period_scores(periods[3:])  # Odd indices
 
-            # Handle missing scores with default values
-            h1 = home_scores[0] if len(home_scores) > 0 else 0
-            h2 = home_scores[1] if len(home_scores) > 1 else 0
-            a1 = away_scores[0] if len(away_scores) > 0 else 0
-            a2 = away_scores[1] if len(away_scores) > 1 else 0
+            home_scores.extend([0] * (3 - len(home_scores))) if len(
+                home_scores
+            ) < 3 else home_scores
+            away_scores.extend([0] * (3 - len(away_scores))) if len(
+                away_scores
+            ) < 3 else away_scores
 
             # Calculate totals
-            home_total = h1 + h2
-            away_total = a1 + a2
+            home_total, h1, h2 = home_scores
+            away_total, a1, a2 = away_scores
 
             # Determine match outcome
             result = (
@@ -114,7 +117,9 @@ class MatchDataScraper:
             .text.strip(),
         )
 
-    def scrape(self, batch_size: int = 100, headless: bool = True) -> None:
+    def scrape(
+        self, batch_size: int = DEFAULT_BATCH_SIZE, headless: bool = True
+    ) -> None:
         """Main scraping workflow with progress tracking."""
         with DatabaseManager(self.db_path) as cursor:
             cursor.execute("""
@@ -134,9 +139,9 @@ class MatchDataScraper:
 
         with tqdm(total=len(match_ids), desc="Scraping matches") as pbar:
             for match_id in match_ids:
-                url = f"{self.URL_PREFIX}{match_id}/#/match-summary"
+                url = f"{self.BASE_URL}{match_id}/#/match-summary"
                 with browser.get_driver(url) as driver:
-                    time.sleep(1.5)  # Network stabilization
+                    time.sleep(self.NETWORK_DELAY)
                     details = self._extract_match_details(
                         BeautifulSoup(driver.page_source, "html.parser")
                     )
@@ -167,5 +172,7 @@ class MatchDataScraper:
         print(f"Inserted {len(data)} records")
 
 
+# Usage example
 if __name__ == "__main__":
-    MatchDataScraper().scrape(batch_size=20, headless=True)
+    match_data_scraper = MatchDataScraper()
+    match_data_scraper.scrape(batch_size=10, headless=True)

@@ -13,12 +13,10 @@ class OddsDataScraper:
     """Scrapes and stores betting odds data from FlashScore matches."""
 
     BASE_URL = "https://www.flashscore.com/match"
-    NETWORK_DELAY = 1.5  # Seconds for page stabilization
+    NETWORK_DELAY = 3
     DEFAULT_BATCH_SIZE = 100
 
-    def __init__(
-        self, db_path: str = "data/processed/database.db", max_retries: int = 3
-    ):
+    def __init__(self, db_path: str = "database/database.db", max_retries: int = 3):
         self.db_path = db_path
         self.max_retries = max_retries
         self._validate_paths()
@@ -114,8 +112,9 @@ class OddsDataScraper:
         """
         with DatabaseManager(self.db_path) as cursor:
             cursor.executemany(query, records)
-        print(f"Persisted {len(records)} odds records")
 
 
+# Usage example
 if __name__ == "__main__":
-    OddsDataScraper().scrape(batch_size=10)
+    odds_scraper = OddsDataScraper()
+    odds_scraper.scrape(batch_size=10)
