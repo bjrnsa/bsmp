@@ -8,7 +8,24 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 
 class BrowserManager:
+    """
+    Manages the Selenium WebDriver for browser automation.
+
+    Attributes
+    ----------
+    options : selenium.webdriver.chrome.options.Options
+        Chrome options for the WebDriver.
+    """
+
     def __init__(self, headless=False):
+        """
+        Initializes the BrowserManager with optional headless mode.
+
+        Parameters
+        ----------
+        headless : bool, optional
+            If True, runs the browser in headless mode. Defaults to False.
+        """
         self.options = Options()
         if headless:
             self.options.add_argument("--headless=new")
@@ -17,7 +34,19 @@ class BrowserManager:
 
     @contextmanager
     def get_driver(self, url: str = None):
-        """Yields a driver instance with optional initial navigation"""
+        """
+        Context manager that yields a WebDriver instance with optional initial navigation.
+
+        Parameters
+        ----------
+        url : str, optional
+            The URL to navigate to after initializing the driver. Defaults to None.
+
+        Yields
+        ------
+        selenium.webdriver.Chrome
+            The Chrome WebDriver instance.
+        """
         driver = webdriver.Chrome(options=self.options)
         try:
             if url:
@@ -28,7 +57,14 @@ class BrowserManager:
             driver.quit()
 
     def _handle_cookies(self, driver):
-        """Handle cookies after page load"""
+        """
+        Handles cookie consent banner after page load.
+
+        Parameters
+        ----------
+        driver : selenium.webdriver.Chrome
+            The Chrome WebDriver instance.
+        """
         try:
             WebDriverWait(driver, 5).until(
                 EC.element_to_be_clickable((By.ID, "onetrust-accept-btn-handler"))
@@ -37,9 +73,5 @@ class BrowserManager:
             print(f"No cookie banner found: {str(e)}")
 
 
-# Usage example
 if __name__ == "__main__":
-    browser = BrowserManager(headless=False)
-    with browser.get_driver(url="https://www.flashscore.com") as driver:
-        print(driver.title)
-        # Additional page interactions here
+    pass

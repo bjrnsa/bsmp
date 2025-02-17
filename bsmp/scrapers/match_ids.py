@@ -28,18 +28,42 @@ class MatchIDScraper:
         config_path: Path = Path("config/flashscore_urls.yaml"),
         db_path: str = "database/database.db",
     ):
+        """
+        Initializes the MatchIDScraper with configuration and database paths.
+
+        Parameters
+        ----------
+        config_path : Path, optional
+            Path to the configuration file containing URLs. Defaults to "config/flashscore_urls.yaml".
+        db_path : str, optional
+            Path to the SQLite database file. Defaults to "database/database.db".
+        """
         self.config_path = config_path
         self.db_path = db_path
         self._validate_paths()
 
     def _validate_paths(self) -> None:
-        """Verify required files and directories exist."""
+        """
+        Verify required files and directories exist.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the configuration file is missing.
+        """
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def _load_config(self) -> List[str]:
-        """Load league URLs from YAML configuration."""
+        """
+        Load league URLs from YAML configuration.
+
+        Returns
+        -------
+        List[str]
+            List of league URLs to scrape.
+        """
         with open(self.config_path) as f:
             config = yaml.safe_load(f)
 
@@ -52,11 +76,25 @@ class MatchIDScraper:
         return urls
 
     def _scroll_to_bottom(self, driver) -> None:
-        """Scroll to page bottom to load more content."""
+        """
+        Scroll to page bottom to load more content.
+
+        Parameters
+        ----------
+        driver : selenium.webdriver.Chrome
+            The Chrome WebDriver instance.
+        """
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 
     def _load_all_matches(self, driver) -> None:
-        """Continuously load matches until no more are available."""
+        """
+        Continuously load matches until no more are available.
+
+        Parameters
+        ----------
+        driver : selenium.webdriver.Chrome
+            The Chrome WebDriver instance.
+        """
         try:
             while True:
                 self._scroll_to_bottom(driver)
@@ -70,7 +108,21 @@ class MatchIDScraper:
             pass
 
     def _extract_ids(self, browser: BrowserManager, url: str) -> Set[str]:
-        """Extract unique match IDs from a league season page."""
+        """
+        Extract unique match IDs from a league season page.
+
+        Parameters
+        ----------
+        browser : BrowserManager
+            The BrowserManager instance.
+        url : str
+            The URL of the league season page.
+
+        Returns
+        -------
+        Set[str]
+            Set of unique match IDs.
+        """
         with browser.get_driver(url) as driver:
             self._load_all_matches(driver)
             soup = BeautifulSoup(driver.page_source, "html.parser")
@@ -83,13 +135,32 @@ class MatchIDScraper:
         }
 
     def _get_existing_ids(self) -> Set[str]:
-        """Retrieve already stored match IDs from database."""
+        """
+        Retrieve already stored match IDs from database.
+
+        Returns
+        -------
+        Set[str]
+            Set of existing match IDs.
+        """
         with DatabaseManager(self.db_path) as cursor:
             cursor.execute("SELECT match_id FROM handball_match_id")
             return {row[0] for row in cursor.fetchall()}
 
     def scrape(self, headless: bool = True) -> int:
-        """Main scraping workflow."""
+        """
+        Main scraping workflow.
+
+        Parameters
+        ----------
+        headless : bool, optional
+            Whether to run the browser in headless mode. Defaults to True.
+
+        Returns
+        -------
+        int
+            Number of new match IDs scraped and stored.
+        """
         urls = self._load_config()
         existing_ids = self._get_existing_ids()
         browser = BrowserManager(headless=headless)
@@ -111,8 +182,5 @@ class MatchIDScraper:
         return len(new_ids)
 
 
-# Usage example
 if __name__ == "__main__":
-    id_scraper = MatchIDScraper()
-    count = id_scraper.scrape()
-    print(f"Scraping complete. New entries: {count}")
+    pass

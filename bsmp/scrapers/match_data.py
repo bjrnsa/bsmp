@@ -21,22 +21,65 @@ class MatchDataScraper:
         config_path: Path = Path("config/flashscore_urls.yaml"),
         db_path: str = "database/database.db",
     ):
+        """
+        Initializes the MatchDataScraper with configuration and database paths.
+
+        Parameters
+        ----------
+        config_path : Path, optional
+            Path to the configuration file containing URLs. Defaults to "config/flashscore_urls.yaml".
+        db_path : str, optional
+            Path to the SQLite database file. Defaults to "database/database.db".
+        """
         self.config_path = config_path
         self.db_path = db_path
         self._validate_paths()
 
     def _validate_paths(self) -> None:
-        """Ensure required files and directories exist."""
+        """
+        Ensure required files and directories exist.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the configuration file is missing.
+        """
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file missing: {self.config_path}")
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def _calculate_season(self, month: int, year: int) -> str:
-        """Determine season string based on match date."""
+        """
+        Determine season string based on match date.
+
+        Parameters
+        ----------
+        month : int
+            The month of the match.
+        year : int
+            The year of the match.
+
+        Returns
+        -------
+        str
+            The season string in the format "YYYY/YYYY".
+        """
         return f"{year}/{year + 1}" if month >= 8 else f"{year - 1}/{year}"
 
     def _parse_datetime(self, dt_str: str) -> Tuple[str, int, int]:
-        """Extract datetime components from raw string."""
+        """
+        Extract datetime components from raw string.
+
+        Parameters
+        ----------
+        dt_str : str
+            The datetime string to parse.
+
+        Returns
+        -------
+        Tuple[str, int, int]
+            The original datetime string, month, and year.
+        """
         date_parts = dt_str.split(".")
         _, month = map(int, date_parts[:2])
         year_time = date_parts[2].split()
@@ -44,7 +87,19 @@ class MatchDataScraper:
         return dt_str, month, year
 
     def _parse_period_scores(self, elements: list) -> List[int]:
-        """Safely convert BeautifulSoup elements to integer scores."""
+        """
+        Safely convert BeautifulSoup elements to integer scores.
+
+        Parameters
+        ----------
+        elements : list
+            List of BeautifulSoup elements containing score data.
+
+        Returns
+        -------
+        List[int]
+            List of integer scores.
+        """
         return [
             int(el.text) if el.text.strip() else 0 for el in elements if el and el.text
         ]
@@ -52,7 +107,19 @@ class MatchDataScraper:
     def _extract_scores(
         self, soup: BeautifulSoup
     ) -> Tuple[int, int, int, int, int, int, str]:
-        """Extract and validate match scores with comprehensive error handling."""
+        """
+        Extract and validate match scores with comprehensive error handling.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            The BeautifulSoup object containing the page content.
+
+        Returns
+        -------
+        Tuple[int, int, int, int, int, int, str]
+            The extracted scores and match result.
+        """
         try:
             # Extract all period score elements
             periods = soup.find_all(class_="smh__part")
@@ -86,7 +153,19 @@ class MatchDataScraper:
             return (0, 0, 0, 0, 0, 0, "U")  # 'U' for unknown
 
     def _extract_match_details(self, soup: BeautifulSoup) -> Optional[Tuple]:
-        """Parse complete match details from page content."""
+        """
+        Parse complete match details from page content.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            The BeautifulSoup object containing the page content.
+
+        Returns
+        -------
+        Optional[Tuple]
+            The extracted match details, or None if extraction fails.
+        """
         try:
             header = soup.find("span", class_="tournamentHeader__country")
             dt_str, month, year = self._parse_datetime(
@@ -107,7 +186,19 @@ class MatchDataScraper:
             return None
 
     def _extract_teams(self, soup: BeautifulSoup) -> Tuple[str, str]:
-        """Extract home and away team names."""
+        """
+        Extract home and away team names.
+
+        Parameters
+        ----------
+        soup : BeautifulSoup
+            The BeautifulSoup object containing the page content.
+
+        Returns
+        -------
+        Tuple[str, str]
+            The home and away team names.
+        """
         return (
             soup.find("div", class_="duelParticipant__home")
             .find("a", class_="participant__participantName participant__overflow")
@@ -120,7 +211,16 @@ class MatchDataScraper:
     def scrape(
         self, batch_size: int = DEFAULT_BATCH_SIZE, headless: bool = True
     ) -> None:
-        """Main scraping workflow with progress tracking."""
+        """
+        Main scraping workflow with progress tracking.
+
+        Parameters
+        ----------
+        batch_size : int, optional
+            Number of records to insert in each batch. Defaults to DEFAULT_BATCH_SIZE.
+        headless : bool, optional
+            Whether to run the browser in headless mode. Defaults to True.
+        """
         with DatabaseManager(self.db_path) as cursor:
             cursor.execute("""
                 SELECT m.match_id 
@@ -158,7 +258,14 @@ class MatchDataScraper:
                 self._store_batch(data_buffer)
 
     def _store_batch(self, data: List[Tuple]) -> None:
-        """Batch insert match records into database."""
+        """
+        Batch insert match records into database.
+
+        Parameters
+        ----------
+        data : List[Tuple]
+            List of match data tuples to insert.
+        """
         query = """
         INSERT INTO handball_match_data (
             flashscore_id, country, league, season, match_info, datetime,
@@ -172,7 +279,5 @@ class MatchDataScraper:
         print(f"Inserted {len(data)} records")
 
 
-# Usage example
 if __name__ == "__main__":
-    match_data_scraper = MatchDataScraper()
-    match_data_scraper.scrape(batch_size=10, headless=True)
+    pass

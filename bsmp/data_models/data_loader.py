@@ -1,12 +1,13 @@
+# %%
 import sqlite3
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import pandas as pd
 
 
 class MatchDataLoader:
-    """Flexible data loader for match data with caching and dynamic filtering."""
+    """Data loader for match data with caching and dynamic filtering."""
 
     def __init__(
         self,
@@ -16,11 +17,18 @@ class MatchDataLoader:
         connection: Optional[sqlite3.Connection] = None,
     ):
         """
-        Initialize data loader with configuration options
+        Initialize data loader with configuration options.
 
-        :param sport: Sport type (e.g., 'handball', 'football')
-        :param db_path: Path to SQLite database file
-        :param connection: Optional existing database connection
+        Parameters
+        ----------
+        sport : str, optional
+            Sport type (e.g., 'handball', 'football'). Defaults to 'handball'.
+        date_format : str, optional
+            Date format for parsing dates. Defaults to '%d.%m.%Y %H:%M'.
+        db_path : Union[str, Path], optional
+            Path to SQLite database file. Defaults to 'database/database.db'.
+        connection : Optional[sqlite3.Connection], optional
+            Optional existing database connection. Defaults to None.
         """
         self.sport = sport
         self.date_format = date_format
@@ -29,13 +37,32 @@ class MatchDataLoader:
         self._validate_tables()
 
     def _create_connection(self) -> sqlite3.Connection:
-        """Establish database connection with error handling"""
+        """
+        Establish database connection with error handling.
+
+        Returns
+        -------
+        sqlite3.Connection
+            The SQLite database connection.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the database file does not exist.
+        """
         if not self.db_path.exists():
             raise FileNotFoundError(f"Database not found at {self.db_path}")
         return sqlite3.connect(self.db_path)
 
     def _validate_tables(self) -> None:
-        """Verify required tables exist in database"""
+        """
+        Verify required tables exist in the database.
+
+        Raises
+        ------
+        ValueError
+            If required tables are missing from the database.
+        """
         required_tables = {f"{self.sport}_match_data", f"{self.sport}_current_clubs"}
         cursor = self.conn.cursor()
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -46,22 +73,49 @@ class MatchDataLoader:
             raise ValueError(f"Missing required tables: {', '.join(missing)}")
 
     def _get_current_teams(
-        self, season: str, league: str, filters: Optional[dict] = None
+        self,
+        league: str,
+        seasons: Optional[List[str]] = None,
+        filters: Optional[Dict[str, str]] = None,
     ) -> pd.Series:
         """
-        Retrieve current teams with optional filters
+        Retrieve current teams with optional filters.
 
-        :param season: Season identifier
-        :param league: League name
-        :param filters: Additional filter criteria
-        :return: Series of team names
+        Parameters
+        ----------
+        league : str
+            League name.
+        seasons : Optional[List[str]], optional
+            List of season identifiers. Defaults to None.
+        filters : Optional[Dict[str, str]], optional
+            Additional filter criteria. Defaults to None.
+
+        Returns
+        -------
+        pd.Series
+            Series of team names.
+
+        Raises
+        ------
+        ValueError
+            If no teams are found for the specified criteria.
         """
         base_query = f"""
             SELECT team_name 
             FROM {self.sport}_current_clubs
-            WHERE season = ? AND league = ?
+            WHERE 1=1
         """
-        params = [season, league]
+
+        params = []
+
+        if league:
+            base_query += " AND league = ?"
+            params.append(league)
+
+        if seasons:
+            season_clause = " OR ".join(["season = ?" for _ in seasons])
+            base_query += f" AND ({season_clause})"
+            params.extend(seasons)
 
         if filters:
             filter_clauses = [f"{k} = ?" for k in filters]
@@ -70,52 +124,73 @@ class MatchDataLoader:
 
         teams = pd.read_sql(base_query, self.conn, params=params)["team_name"]
         if teams.empty:
-            raise ValueError(f"No teams found for {season} {league}")
+            raise ValueError(f"No teams found for {seasons} {league}")
         return teams
 
     def load_matches(
         self,
-        season: str,
-        league: str,
-        date_range: Optional[tuple] = None,
-        team_filters: Optional[dict] = None,
-        result_mapping: dict = {"H": 1, "A": -1, "D": 0},
+        league: Optional[str] = None,
+        seasons: Optional[List[str]] = None,
+        date_range: Optional[Tuple[str, str]] = None,
+        team_filters: Optional[Dict[str, str]] = None,
+        result_mapping: Dict[str, int] = {"H": 1, "A": -1, "D": 0},
     ) -> pd.DataFrame:
         """
-        Load match data with flexible filtering options
+        Load match data with flexible filtering options.
 
-        :param season: Season identifier
-        :param league: League name
-        :param date_range: Tuple of (start_date, end_date) as strings
-        :param team_filters: Additional filters for teams table
-        :param result_mapping: Custom result value mapping
-        :return: Processed DataFrame of match data
+        Parameters
+        ----------
+        league : Optional[str], optional
+            League name. Defaults to None.
+        seasons : Optional[List[str]], optional
+            List of season identifiers. Defaults to None.
+        date_range : Optional[Tuple[str, str]], optional
+            Tuple of (start_date, end_date) as strings. Defaults to None.
+        team_filters : Optional[Dict[str, str]], optional
+            Additional filters for teams table. Defaults to None.
+        result_mapping : Dict[str, int], optional
+            Custom result value mapping. Defaults to {"H": 1, "A": -1, "D": 0}.
+
+        Returns
+        -------
+        pd.DataFrame
+            Processed DataFrame of match data.
+
+        Raises
+        ------
+        sqlite3.Error
+            If there is a database error.
         """
         try:
-            teams = self._get_current_teams(season, league, team_filters)
+            teams = self._get_current_teams(league, seasons, team_filters)
 
             # Add team index mapping
-            self.team_list = sorted(teams.unique())
             self.team_to_idx = {
-                team: idx + 1 for idx, team in enumerate(self.team_list)
+                team: idx + 1 for idx, team in enumerate(sorted(teams.unique()))
             }
 
             query = f"""
                 SELECT 
                     flashscore_id, season, match_info, datetime, league,
                     home_team, away_team, 
-                    home_goals_full AS hg, 
-                    home_goals_h1 AS h1, home_goals_h2 AS h2,
-                    away_goals_full AS ag,
-                    away_goals_h1 AS a1, away_goals_h2 AS a2,
+                    home_goals_full AS home_goals, 
+                    away_goals_full AS away_goals,
                     result
                 FROM {self.sport}_match_data
                 WHERE home_team IN {tuple(teams)}
                 AND away_team IN {tuple(teams)}
             """
+            params = []
+            if seasons:
+                season_clause = " OR ".join(["season = ?" for _ in seasons])
+                query += f" AND ({season_clause})"
+                params.extend(seasons)
 
             df = pd.read_sql(
-                query, self.conn, parse_dates={"datetime": {"format": self.date_format}}
+                query,
+                self.conn,
+                parse_dates={"datetime": {"format": self.date_format}},
+                params=params,
             )
 
             if date_range:
@@ -128,14 +203,24 @@ class MatchDataLoader:
             print(f"Database error: {str(e)}")
             return pd.DataFrame()
 
-    def get_team_mapping(self) -> pd.DataFrame:
-        """Get team ID mapping for model reference"""
-        return pd.DataFrame(
-            {"team": self.team_list, "index": range(len(self.team_list))}
-        )
+    def _process_data(
+        self, df: pd.DataFrame, result_mapping: Dict[str, int]
+    ) -> pd.DataFrame:
+        """
+        Post-process dataframe with common transformations.
 
-    def _process_data(self, df: pd.DataFrame, result_mapping: dict) -> pd.DataFrame:
-        """Post-process dataframe with common transformations"""
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to process.
+        result_mapping : Dict[str, int]
+            Mapping of result values.
+
+        Returns
+        -------
+        pd.DataFrame
+            The processed DataFrame.
+        """
         if df.empty:
             return df
 
@@ -151,17 +236,38 @@ class MatchDataLoader:
             .pipe(self._add_additional_features)
         )
 
-    def _add_additional_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add calculated features to dataframe"""
+    def _add_additional_features(
+        self,
+        df: pd.DataFrame,
+        home_goals: str = "home_goals",
+        away_goals: str = "away_goals",
+    ) -> pd.DataFrame:
+        """
+        Add calculated features to dataframe.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            The DataFrame to add features to.
+        home_goals : str, optional
+            Column name for home goals. Defaults to "home_goals".
+        away_goals : str, optional
+            Column name for away goals. Defaults to "away_goals".
+
+        Returns
+        -------
+        pd.DataFrame
+            The DataFrame with additional features.
+        """
         return df.assign(
-            goal_difference=lambda x: x["hg"] - x["ag"],
-            goal_difference_h1=lambda x: x["h1"] - x["a1"],
-            goal_difference_h2=lambda x: x["h2"] - x["a2"],
-            total_goals=lambda x: x["hg"] + x["ag"],
+            goal_difference=lambda x: x[home_goals] - x[away_goals],
+            total_goals=lambda x: x[home_goals] + x[away_goals],
         )
 
     def close(self) -> None:
-        """Close database connection"""
+        """
+        Close database connection.
+        """
         if self.conn:
             self.conn.close()
 
@@ -172,16 +278,5 @@ class MatchDataLoader:
         self.close()
 
 
-## Usage Example
 if __name__ == "__main__":
-    loader = MatchDataLoader(sport="handball")
-    df = loader.load_matches(
-        season="2024/2025",
-        league="Herre Handbold Ligaen",
-        date_range=("2024-08-01", "2025-02-01"),
-        team_filters={"country": "Denmark"},
-    )
-    # coords, home_idx, away_idx = loader.match_coordinates()
-
-    print(f"Loaded {len(df)} matches")
-    print(df.head())
+    pass

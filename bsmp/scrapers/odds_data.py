@@ -17,16 +17,40 @@ class OddsDataScraper:
     DEFAULT_BATCH_SIZE = 100
 
     def __init__(self, db_path: str = "database/database.db", max_retries: int = 3):
+        """
+        Initializes the OddsDataScraper with database path and retry settings.
+
+        Parameters
+        ----------
+        db_path : str, optional
+            Path to the SQLite database file. Defaults to "database/database.db".
+        max_retries : int, optional
+            Maximum number of retries for network requests. Defaults to 3.
+        """
         self.db_path = db_path
         self.max_retries = max_retries
         self._validate_paths()
 
     def _validate_paths(self) -> None:
-        """Ensure required filesystem resources exist."""
+        """
+        Ensure required filesystem resources exist.
+
+        Raises
+        ------
+        FileNotFoundError
+            If the database path does not exist.
+        """
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def _fetch_pending_matches(self) -> Iterator[str]:
-        """Generator for matches needing odds data collection."""
+        """
+        Generator for matches needing odds data collection.
+
+        Yields
+        ------
+        str
+            Match IDs that need odds data collection.
+        """
         query = """
         SELECT m.match_id 
         FROM handball_match_id m
@@ -34,14 +58,25 @@ class OddsDataScraper:
         WHERE o.flashscore_id IS NULL
         """
 
-        # Fetch matches without odds data
         with DatabaseManager(self.db_path) as cursor:
             cursor.execute(query)
             for row in cursor.fetchall():
                 yield row[0]
 
     def _parse_odds_row(self, odds_row: Tag) -> List[Tuple[str, float, float, float]]:
-        """Extract bookmaker odds from odds row element."""
+        """
+        Extract bookmaker odds from odds row element.
+
+        Parameters
+        ----------
+        odds_row : Tag
+            BeautifulSoup Tag object containing the odds row.
+
+        Returns
+        -------
+        List[Tuple[str, float, float, float]]
+            List of tuples containing bookmaker name and odds values.
+        """
         results = []
         for bookmaker in odds_row.find_all(class_="oddsRowContent"):
             try:
@@ -56,7 +91,19 @@ class OddsDataScraper:
         return results
 
     def _parse_odd(self, value: str) -> float:
-        """Safely convert odd value to float."""
+        """
+        Safely convert odd value to float.
+
+        Parameters
+        ----------
+        value : str
+            The odd value as a string.
+
+        Returns
+        -------
+        float
+            The odd value as a float.
+        """
         try:
             return float(value.strip())
         except (ValueError, TypeError):
@@ -65,7 +112,21 @@ class OddsDataScraper:
     def _process_match_odds(
         self, match_id: str, browser: BrowserManager
     ) -> List[Tuple]:
-        """Scrape and parse odds data for a single match."""
+        """
+        Scrape and parse odds data for a single match.
+
+        Parameters
+        ----------
+        match_id : str
+            The match ID to process.
+        browser : BrowserManager
+            The BrowserManager instance.
+
+        Returns
+        -------
+        List[Tuple]
+            List of tuples containing the odds data for the match.
+        """
         url = f"{self.BASE_URL}/{match_id}/#/match-summary"
         records = []
 
@@ -86,7 +147,16 @@ class OddsDataScraper:
     def scrape(
         self, batch_size: int = DEFAULT_BATCH_SIZE, headless: bool = True
     ) -> None:
-        """Orchestrate scraping workflow with progress tracking."""
+        """
+        Orchestrate scraping workflow with progress tracking.
+
+        Parameters
+        ----------
+        batch_size : int, optional
+            Number of records to insert in each batch. Defaults to DEFAULT_BATCH_SIZE.
+        headless : bool, optional
+            Whether to run the browser in headless mode. Defaults to True.
+        """
         browser = BrowserManager(headless=headless)
         data_buffer = []
 
@@ -104,7 +174,14 @@ class OddsDataScraper:
                 self._store_batch(data_buffer)
 
     def _store_batch(self, records: List[Tuple]) -> None:
-        """Batch insert records with transaction management."""
+        """
+        Batch insert records with transaction management.
+
+        Parameters
+        ----------
+        records : List[Tuple]
+            List of records to insert into the database.
+        """
         query = """
         INSERT INTO handball_odds_data (
             flashscore_id, bookmaker, home_win_odds, draw_odds, away_win_odds
@@ -114,7 +191,5 @@ class OddsDataScraper:
             cursor.executemany(query, records)
 
 
-# Usage example
 if __name__ == "__main__":
-    odds_scraper = OddsDataScraper()
-    odds_scraper.scrape(batch_size=10)
+    pass
