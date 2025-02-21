@@ -2,9 +2,7 @@
 name = "bsmp"
 version = "0.0.1"
 description = ""
-authors = [
-    {name = "Bjoern Aagaard"}
-]
+authors = [{ name = "Bjoern Aagaard" }]
 readme = "README.md"
 dependencies = [
     "arviz>=0.20.0",
@@ -21,9 +19,8 @@ dependencies = [
     "seaborn>=0.13.2",
     "selenium>=4.28.1",
 ]
-package-mode = true 
+
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-

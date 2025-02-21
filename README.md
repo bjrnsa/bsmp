@@ -4,10 +4,16 @@ This project implements Bayesian sports models using Stan, focusing on handball 
 
 ## Installation
 
-I have set up the enviroment using [uv](https://astral.sh/blog/uv). Once installeed, you can clone the git, terminal into it and run:
+The enviroment uses [uv](https://astral.sh/blog/uv). Once installeed, you can clone the git, terminal into it and run:
 
 ```sh
 uv sync
+```
+
+Alternatively you can install it directly:
+
+```sh
+pip install -e .
 ```
 
 Apologies for any problems. This is my first attempt making anything package related.
