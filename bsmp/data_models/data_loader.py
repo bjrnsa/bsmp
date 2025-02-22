@@ -203,6 +203,37 @@ class MatchDataLoader:
             print(f"Database error: {str(e)}")
             return pd.DataFrame()
 
+    def load_odds(self, match_ids: List[int]) -> pd.DataFrame:
+        """
+        Load odds data for given match IDs.
+
+        Parameters
+        ----------
+        match_ids : List[int]
+            List of match IDs to load odds for.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame containing odds data for the specified match IDs.
+
+        Raises
+        ------
+        sqlite3.Error
+            If there is a database error.
+        """
+        odds_query = f"""
+            SELECT flashscore_id, bookmaker, home_win_odds, draw_odds, away_win_odds
+            FROM handball_odds_data
+            WHERE flashscore_id in {tuple(match_ids)}
+        """
+        try:
+            odds_df = pd.read_sql(odds_query, self.conn, index_col="flashscore_id")
+            return odds_df
+        except sqlite3.Error as e:
+            print(f"Database error: {str(e)}")
+            return pd.DataFrame()
+
     def _process_data(
         self, df: pd.DataFrame, result_mapping: Dict[str, int]
     ) -> pd.DataFrame:

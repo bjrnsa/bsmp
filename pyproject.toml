@@ -4,6 +4,7 @@ version = "0.0.1"
 description = ""
 authors = [{ name = "Bjoern Aagaard" }]
 readme = "README.md"
+requires-python = ">=3.13"
 dependencies = [
     "arviz>=0.20.0",
     "beautifulsoup4>=4.13.3",
