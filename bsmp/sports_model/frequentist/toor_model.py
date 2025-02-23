@@ -65,6 +65,8 @@ class TOOR(BradleyTerry):
         coefficients, self.spread_error = self._fit_ols(self.goal_difference, X)
         self.home_coefficient, self.home_team_coef, self.away_team_coef = coefficients
 
+        self.fitted = True
+
     def predict(
         self,
         home_team: str,
@@ -84,6 +86,8 @@ class TOOR(BradleyTerry):
         Returns:
             tuple: (home_win_prob, draw_prob, away_win_prob)
         """
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
         # Get team ratings
         home_rating = self.team_ratings[home_team]
         away_rating = self.team_ratings[away_team]
