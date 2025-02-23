@@ -1,32 +1,50 @@
 # %%
+from typing import Optional
+
 import numpy as np
 import pandas as pd
 
-from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.frequentist.bradley_terry_model import BradleyTerry
+from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class TOOR(BradleyTerry):
     """
-    TOOR (Team OLS Optimized Rating) model that extends Bradley-Terry.
-    This model combines Bradley-Terry ratings with linear regression to predict
-    match outcomes and point spreads using team-specific coefficients.
+    Team OLS Optimized Rating (TOOR) model.
+
+    An extension of the Bradley-Terry model that uses team-specific coefficients
+    for more accurate point spread predictions. The model combines traditional
+    Bradley-Terry ratings with a team-specific regression approach.
+
+    Attributes:
+        team_coefficients (np.ndarray): Team-specific regression coefficients
+        home_coefficient (float): Home advantage coefficient
+        home_team_coef (float): Home team rating coefficient
+        away_team_coef (float): Away team rating coefficient
+        spread_error (float): Standard error of spread predictions
     """
 
     def __init__(
-        self, df: pd.DataFrame, weights: np.ndarray = None, home_advantage: float = 0.1
+        self,
+        df: pd.DataFrame,
+        ratings_weights: Optional[np.ndarray] = None,
+        match_weights: Optional[np.ndarray] = None,
+        home_advantage: float = 0.1,
     ):
         """
         Initialize TOOR model.
 
         Args:
-            df: DataFrame containing match data
-            weights: Optional weights for each observation
+            df: DataFrame with columns [home_team, away_team, result, goal_difference]
+            ratings_weights: Optional weights for ratings optimization
+            match_weights: Optional weights for match prediction
             home_advantage: Home field advantage parameter
         """
-        super().__init__(df, weights, home_advantage)
+        super().__init__(df, ratings_weights, match_weights, home_advantage)
         self.team_coefficients = None
         self.home_coefficient = None
+        self.home_team_coef = None
+        self.away_team_coef = None
 
     def fit(self) -> None:
         """
@@ -83,10 +101,6 @@ class TOOR(BradleyTerry):
 
 
 if __name__ == "__main__":
-    # Example usage
-    loader = MatchDataLoader(sport="handball")
-    df = loader.load_matches(league="Herre Handbold Ligaen")
-
     # Load AFL data for testing
     df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
     df.columns = df.columns.str.lower().str.replace(" ", "_")
@@ -94,14 +108,29 @@ if __name__ == "__main__":
     df["goal_difference"] = df["home_pts"] - df["away_pts"]
     df["result"] = np.where(df["goal_difference"] > 0, 1, -1)
 
-    # Fit model
-    model = TOOR(df, None, 0.1)
+    df["date"] = pd.to_datetime(df["date"], format="%b %d (%a %I:%M%p)")
+    team_weights = dixon_coles_weights(df.date)
+    np.random.seed(0)
+    spread_weights = np.random.uniform(0.1, 1.0, len(df))
+
+    home_team = "Richmond"
+    away_team = "Geelong"
+
+    model = TOOR(df, ratings_weights=team_weights)
     model.fit()
+    prob_home, prob_draw, prob_away = model.predict(
+        home_team, away_team, point_spread=15, include_draw=False
+    )
 
-    # Make predictions
-    teams = [("St Kilda", "North Melbourne")]
-
-    for home_team, away_team in teams:
-        probs = model.predict(home_team, away_team, point_spread=0, include_draw=False)
-        print(f"\n{home_team} vs {away_team}")
-        print(f"Win probabilities (H/D/A): {probs}")
+    # Use different weights
+    model = TOOR(df, ratings_weights=team_weights, match_weights=spread_weights)
+    model.fit()
+    prob_home, prob_draw, prob_away = model.predict(
+        home_team, away_team, point_spread=15, include_draw=False
+    )
+    # Use no weights
+    model = TOOR(df)
+    model.fit()
+    prob_home, prob_draw, prob_away = model.predict(
+        home_team, away_team, point_spread=15, include_draw=False
+    )
