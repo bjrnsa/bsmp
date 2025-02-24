@@ -5,7 +5,7 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
-from scipy.optimize import approx_fprime, minimize
+from scipy.optimize import minimize
 
 from bsmp.sports_model.utils import dixon_coles_weights
 
@@ -13,16 +13,23 @@ from bsmp.sports_model.utils import dixon_coles_weights
 class BradleyTerry:
     """
     Bradley-Terry model for predicting match outcomes.
-    
+
     A probabilistic model that estimates team ratings and predicts match outcomes
     using maximum likelihood estimation. The model combines logistic regression for
     win probabilities with OLS regression for point spread predictions.
 
     Attributes:
         teams (np.ndarray): Unique team identifiers
-        team_ratings (dict): Team strength ratings
-        home_advantage (float): Home field advantage parameter
+        n_teams (int): Number of teams in the dataset
+        team_map (Dict[str, int]): Mapping of team names to indices
+        home_idx (np.ndarray): Indices of home teams
+        away_idx (np.ndarray): Indices of away teams
+        ratings_weights (np.ndarray): Weights for rating optimization
+        match_weights (np.ndarray): Weights for spread prediction
         fitted (bool): Whether the model has been fitted
+        params (np.ndarray): Optimized model parameters after fitting
+            [0:n_teams] - Team ratings
+            [-1] - Home advantage parameter
         intercept (float): Point spread model intercept
         spread_coefficient (float): Point spread model coefficient
         spread_error (float): Standard error of spread predictions
@@ -35,59 +42,55 @@ class BradleyTerry:
         match_weights: Optional[np.ndarray] = None,
         home_advantage: float = 0.1,
     ) -> None:
-        """
-        Initialize Bradley-Terry model.
+        """Initialize Bradley-Terry model."""
+        # Extract numpy arrays once
+        data = {
+            col: df[col].to_numpy()
+            for col in ["home_team", "away_team", "goal_difference", "result"]
+        }
+        self.__dict__.update(data)
 
-        Args:
-            df: DataFrame with columns [home_team, away_team, result, goal_difference]
-            ratings_weights: Optional weights for ratings optimization
-            match_weights: Optional weights for match prediction
-            home_advantage: Initial home field advantage parameter
-        """
-        # Convert DataFrame columns to numpy arrays
-        for col in df:
-            setattr(self, col, df[col].to_numpy())
-
-        # Initialize model parameters
+        # Team setup
         self.teams = np.unique(self.home_team)
-        self.team_ratings = dict.fromkeys(self.teams, 1.0)
-        self.params = np.array(list(self.team_ratings.values()) + [home_advantage])
+        self.n_teams = len(self.teams)
+        self.team_map = {team: idx for idx, team in enumerate(self.teams)}
 
-        # Prepare training data
-        self.data = np.array([self.home_team, self.away_team, self.result]).T
-        self.n_observations = len(self.data)
+        # Create team indices
+        self.home_idx = np.array([self.team_map[team] for team in self.home_team])
+        self.away_idx = np.array([self.team_map[team] for team in self.away_team])
+
+        # Set weights
+        n_matches = len(df)
         self.ratings_weights = (
-            np.ones(self.n_observations) if ratings_weights is None else ratings_weights
+            np.ones(n_matches) if ratings_weights is None else ratings_weights
         )
         self.match_weights = (
-            np.ones(self.n_observations) if match_weights is None else match_weights
+            np.ones(n_matches) if match_weights is None else match_weights
         )
 
-        # Set unfitted
+        # Initialize parameters
+        self.params = np.zeros(self.n_teams + 1)
+        self.params[-1] = home_advantage
         self.fitted = False
 
     def fit(self) -> None:
-        """
-        Fit the Bradley-Terry model to estimate team ratings and predict point spreads.
-        """
-        # Optimize model parameters
-        self.best_params = self._optimize_parameters()
-        self.team_ratings = dict(zip(self.teams, self.best_params[:-1]))
-        self.home_advantage = self.best_params[-1]
+        """Fit the Bradley-Terry model."""
+        try:
+            # Optimize parameters
+            self.params = self._optimize_parameters()
 
-        # Fit point spread model
-        home_ratings = self._get_team_ratings(self.home_team)
-        away_ratings = self._get_team_ratings(self.away_team)
-        rating_diff = self._logit_transform(
-            self.home_advantage + home_ratings - away_ratings
-        )
+            # Fit point spread model
+            rating_diff = self._get_rating_difference()
+            (self.intercept, self.spread_coefficient), self.spread_error = (
+                self._fit_ols(self.goal_difference, rating_diff)
+            )
 
-        # Estimate spread parameters using OLS
-        (self.intercept, self.spread_coefficient), self.spread_error = self._fit_ols(
-            self.goal_difference, rating_diff
-        )
+            self.fitted = True
+            return self
 
-        self.fitted = True
+        except Exception as e:
+            self.fitted = False
+            raise ValueError(f"Model fitting failed: {str(e)}") from e
 
     def predict(
         self,
@@ -111,7 +114,18 @@ class BradleyTerry:
         if not self.fitted:
             raise ValueError("Model has not been fitted yet.")
 
-        rating_diff = 1 - self._calculate_rating_difference(home_team, away_team)
+        # Validate teams
+        for team in (home_team, away_team):
+            if team not in self.team_map:
+                raise ValueError(f"Unknown team: {team}")
+
+        # Calculate rating difference
+        rating_diff = self._get_rating_difference(
+            home_idx=self.team_map[home_team],
+            away_idx=self.team_map[away_team],
+        )
+
+        # Calculate predicted spread
         predicted_spread = self.intercept + self.spread_coefficient * rating_diff
 
         return self._calculate_probabilities(
@@ -119,23 +133,75 @@ class BradleyTerry:
         )
 
     def _optimize_parameters(self) -> np.ndarray:
-        """
-        Optimize model parameters using the SLSQP algorithm.
-        """
+        """Optimize model parameters using SLSQP."""
         result = minimize(
-            fun=lambda p: self._log_likelihood(p, self.data, self.ratings_weights)
-            / self.n_observations,
+            fun=lambda p: self._log_likelihood(p) / len(self.result),
             x0=self.params,
-            jac=lambda p: approx_fprime(
-                p,
-                lambda x: self._log_likelihood(x, self.data, self.ratings_weights)
-                / self.n_observations,
-                epsilon=6.5e-07,
-            ),
             method="SLSQP",
             options={"ftol": 1e-10, "maxiter": 200},
         )
         return result.x
+
+    def _log_likelihood(self, params: np.ndarray) -> float:
+        """Calculate negative log likelihood for parameter optimization."""
+        ratings = params[:-1]
+        home_advantage = params[-1]
+        log_likelihood = 0.0
+
+        home_ratings = ratings[self.home_idx]
+        away_ratings = ratings[self.away_idx]
+        win_probs = self._logit_transform(home_advantage + home_ratings - away_ratings)
+
+        # Vectorized calculation
+        win_mask = self.result == 1
+        loss_mask = self.result == -1
+        draw_mask = ~(win_mask | loss_mask)
+
+        log_likelihood += np.sum(
+            self.ratings_weights[win_mask] * np.log(win_probs[win_mask])
+        )
+        log_likelihood += np.sum(
+            self.ratings_weights[loss_mask] * np.log(1 - win_probs[loss_mask])
+        )
+        log_likelihood += np.sum(
+            self.ratings_weights[draw_mask]
+            * (np.log(win_probs[draw_mask]) + np.log(1 - win_probs[draw_mask]))
+        )
+
+        return -log_likelihood
+
+    def _get_rating_difference(
+        self,
+        home_idx: Union[int, np.ndarray, None] = None,
+        away_idx: Union[int, np.ndarray, None] = None,
+    ) -> np.ndarray:
+        """Calculate rating difference between teams."""
+        if home_idx is None:
+            home_idx, away_idx = self.home_idx, self.away_idx
+
+        ratings = self.params[:-1]
+        home_advantage = self.params[-1]
+        return self._logit_transform(
+            home_advantage + ratings[home_idx] - ratings[away_idx]
+        )
+
+    def _logit_transform(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """Apply logistic transformation."""
+        return 1 / (1 + np.exp(-x))
+
+    def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Fit weighted OLS regression using match weights."""
+        X = np.column_stack((np.ones(len(X)), X))
+        W = np.diag(self.match_weights)
+
+        # Use more efficient matrix operations
+        XtW = X.T @ W
+        coefficients = np.linalg.solve(XtW @ X, XtW @ y)
+        residuals = y - X @ coefficients
+        weighted_sse = residuals.T @ W @ residuals
+        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
+
+        return coefficients, std_error
 
     def _calculate_probabilities(
         self,
@@ -143,92 +209,34 @@ class BradleyTerry:
         std_error: float,
         point_spread: float = 0.0,
         include_draw: bool = True,
-    ) -> tuple:
+    ) -> Tuple[float, float, float]:
         """Calculate win/draw/loss probabilities using normal distribution."""
         if include_draw:
-            prob_home = 1 - stats.norm.cdf(
-                point_spread + 0.5, predicted_spread, std_error
-            )
-            prob_away = 1 - stats.norm.cdf(
-                -point_spread - 0.5, -predicted_spread, std_error
-            )
-            prob_draw = 1 - prob_home - prob_away
+            thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
+            probs = stats.norm.cdf(thresholds, predicted_spread, std_error)
+            return 1 - probs[0], probs[0] - probs[1], probs[1]
         else:
             prob_home = 1 - stats.norm.cdf(point_spread, predicted_spread, std_error)
-            prob_draw = np.nan
-            prob_away = 1 - stats.norm.cdf(-point_spread, -predicted_spread, std_error)
+            return prob_home, np.nan, 1 - prob_home
 
-        return prob_home, prob_draw, prob_away
+    def get_team_ratings(self) -> pd.DataFrame:
+        """Get team ratings as a DataFrame."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
 
-    def _log_likelihood(
-        self,
-        params: np.ndarray,
-        data: np.ndarray,
-        weights: np.ndarray,
-    ) -> float:
-        """Calculate negative log likelihood for parameter optimization."""
-        ratings = params[:-1]
-        home_advantage = params[-1]
-        log_likelihood = 0.0
-
-        for i, (home, away, result) in enumerate(data):
-            home_rating = ratings[self.teams == home][0]
-            away_rating = ratings[self.teams == away][0]
-            win_prob = self._logit_transform(home_advantage + home_rating - away_rating)
-
-            if result == 1:
-                outcome_prob = win_prob
-            elif result == -1:
-                outcome_prob = 1 - win_prob
-            else:  # Draw
-                log_likelihood += weights[i] * (np.log(win_prob) + np.log(1 - win_prob))
-                continue
-
-            log_likelihood += weights[i] * np.log(outcome_prob)
-
-        return -log_likelihood
-
-    def _logit_transform(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """Apply logistic transformation."""
-        return 1 / (1 + np.exp(-x))
-
-    def _calculate_rating_difference(self, home_team: str, away_team: str) -> float:
-        """Calculate logit-transformed rating difference between teams."""
-        return self._logit_transform(
-            -(
-                self.home_advantage
-                + self.team_ratings[home_team]
-                - self.team_ratings[away_team]
-            )
+        return pd.DataFrame({"team": self.teams, "rating": self.params[:-1]}).set_index(
+            "team"
         )
 
-    def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Fit weighted OLS regression and return parameters and standard error.
+    def get_team_rating(self, team: str) -> float:
+        """Get rating for a specific team."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
 
-        Args:
-            y: Target variable (goal differences)
-            X: Feature matrix
+        if team not in self.team_map:
+            raise ValueError(f"Unknown team: {team}")
 
-        Returns:
-            tuple: (coefficients, standard error)
-        """
-        X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights)
-
-        # Weighted least squares estimation
-        coefficients = np.linalg.inv(X.T @ W @ X) @ X.T @ W @ y
-
-        # Weighted residuals
-        residuals = y - X @ coefficients
-        weighted_sse = residuals.T @ W @ residuals
-        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
-
-        return coefficients, std_error
-
-    def _get_team_ratings(self, teams: np.ndarray) -> np.ndarray:
-        """Get ratings for a list of teams."""
-        return np.array([self.team_ratings[team] for team in teams])
+        return self.params[self.team_map[team]]
 
 
 if __name__ == "__main__":
@@ -245,20 +253,8 @@ if __name__ == "__main__":
     spread_weights = np.random.uniform(0.1, 1.0, len(df))
 
     home_team = "Richmond"
-    away_team = "Geelong"
+    away_team = "GWS Giants"
 
-    model = BradleyTerry(df, ratings_weights=team_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=15, include_draw=False
-    )
-
-    # Use different weights
-    model = BradleyTerry(df, ratings_weights=team_weights, match_weights=spread_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=15, include_draw=False
-    )
     # Use no weights
     model = BradleyTerry(df)
     model.fit()

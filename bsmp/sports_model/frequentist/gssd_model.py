@@ -4,6 +4,7 @@ from typing import Tuple, Union
 import numpy as np
 import pandas as pd
 from scipy import stats
+from scipy.optimize import minimize
 
 from bsmp.sports_model.utils import dixon_coles_weights
 
@@ -28,7 +29,9 @@ class GSSD:
         paa_coeff (float): Coefficient for away team's defensive rating
     """
 
-    def __init__(self, df: pd.DataFrame, match_weights: Union[np.ndarray, None] = None):
+    def __init__(
+        self, df: pd.DataFrame, match_weights: Union[np.ndarray, None] = None
+    ) -> None:
         """
         Initialize GSSD model.
 
@@ -42,10 +45,23 @@ class GSSD:
             match_weights (np.ndarray, optional): Weights for match prediction.
                 If None, equal weights are used.
         """
-        # Basic setup
+        # Extract numpy arrays once
+        data = {
+            col: df[col].to_numpy()
+            for col in ["home_team", "away_team", "goal_difference"]
+        }
+        self.__dict__.update(data)
+
+        # Team setup
         self.teams = np.unique(df.home_team.to_numpy())
-        self.home_team = df.home_team.to_numpy()
-        self.goal_difference = df.goal_difference.to_numpy()
+        self.n_teams = len(self.teams)
+        self.team_map = {team: idx for idx, team in enumerate(self.teams)}
+
+        # Create team indices
+        self.home_idx = np.array([self.team_map[team] for team in self.home_team])
+        self.away_idx = np.array([self.team_map[team] for team in self.away_team])
+
+        # Set weights
         self.match_weights = (
             np.ones(len(df)) if match_weights is None else match_weights
         )
@@ -54,27 +70,91 @@ class GSSD:
         self._calculate_team_statistics(df)
         self.fitted = False
 
-    def fit(self):
+    def fit(self) -> "GSSD":
         """
         Fit the GSSD model to the data.
 
         Estimates team-specific coefficients using weighted OLS regression.
         Sets is_fitted to True upon completion.
+
+        Returns:
+            GSSD: The fitted GSSD model instance.
         """
-        # Prepare features and fit model
-        features = np.column_stack((self.pfh, self.pah, self.pfa, self.paa))
-        model_params, self.std_error = self._fit_ols(self.goal_difference, features)
+        try:
+            # Prepare features and fit model
+            features = np.column_stack((self.pfh, self.pah, self.pfa, self.paa))
+            initial_guess = np.array(
+                [0.1, 1.0, 1.0, -1.0, -1.0]
+            )  # [intercept, pfh, pah, pfa, paa]
+            result = minimize(
+                self._sse_function,
+                initial_guess,
+                method="L-BFGS-B",
+                options={"ftol": 1e-10, "maxiter": 200},
+            )
 
-        # Store model parameters
-        (
-            self.intercept,
-            self.pfh_coeff,
-            self.pah_coeff,
-            self.pfa_coeff,
-            self.paa_coeff,
-        ) = model_params
+            # Store model parameters
+            self.const = result.x[0]
+            self.pfh_coeff = result.x[1]
+            self.pah_coeff = result.x[2]
+            self.pfa_coeff = result.x[3]
+            self.paa_coeff = result.x[4]
 
-        self.fitted = True
+            # Calculate spread error
+            predictions = self._get_predictions(features)
+            (self.intercept, self.spread_coefficient), self.spread_error = (
+                self._fit_ols(self.goal_difference, predictions)
+            )
+            self.fitted = True
+            return self
+
+        except Exception as e:
+            self.fitted = False
+            raise ValueError(f"Model fitting failed: {str(e)}") from e
+
+    def _sse_function(self, parameters: np.ndarray) -> float:
+        """
+        Calculate sum of squared errors for parameter optimization.
+
+        Args:
+            parameters (np.ndarray): Array of [intercept, pfh_coeff, pah_coeff, pfa_coeff, paa_coeff]
+
+        Returns:
+            float: Sum of squared errors
+        """
+        intercept, pfh_coeff, pah_coeff, pfa_coeff, paa_coeff = parameters
+
+        # Vectorized calculation of predictions
+        predictions = (
+            intercept
+            + pfh_coeff * self.pfh
+            + pah_coeff * self.pah
+            + pfa_coeff * self.pfa
+            + paa_coeff * self.paa
+        )
+
+        # Calculate weighted squared errors
+        errors = self.goal_difference - predictions
+        sse = np.sum(self.match_weights * (errors**2))
+
+        return sse
+
+    def _get_predictions(self, features: np.ndarray) -> np.ndarray:
+        """Calculate predictions using current model parameters.
+
+        Args:
+            features (np.ndarray): Feature matrix for predictions.
+
+        Returns:
+            np.ndarray: Predicted values.
+        """
+        return (
+            self.const
+            + self.pfh_coeff * features[:, 0]
+            + self.pah_coeff * features[:, 1]
+            + self.pfa_coeff * features[:, 2]
+            + self.paa_coeff * features[:, 3]
+        )
 
     def predict(
         self,
@@ -90,8 +170,7 @@ class GSSD:
             home_team (str): Name of the home team
             away_team (str): Name of the away team
             point_spread (float, optional): Point spread adjustment. Defaults to 0.0
-            include_draw (bool, optional): Whether to include draw probability.
-                Defaults to True
+            include_draw (bool, optional): Whether to include draw probability. Defaults to True
 
         Returns:
             Tuple[float, float, float]: Probabilities of (home win, draw, away win)
@@ -105,40 +184,21 @@ class GSSD:
 
         # Calculate spread
         predicted_spread = (
-            self.intercept
+            self.const
             + home_off * self.pfh_coeff
             + home_def * self.pah_coeff
             + away_off * self.pfa_coeff
             + away_def * self.paa_coeff
         )
 
+        predicted_spread = self.intercept + self.spread_coefficient * predicted_spread
+
         return self._calculate_probabilities(
             predicted_spread=predicted_spread,
-            std_error=self.std_error,
+            std_error=self.spread_error,
             point_spread=point_spread,
             include_draw=include_draw,
         )
-
-    def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Fit weighted OLS regression.
-
-        Args:
-            y (np.ndarray): Target variable (goal differences)
-            X (np.ndarray): Feature matrix of team statistics
-
-        Returns:
-            Tuple[np.ndarray, float]: Model coefficients and standard error
-        """
-        X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights)
-
-        coefficients = np.linalg.inv(X.T @ W @ X) @ X.T @ W @ y
-        residuals = y - X @ coefficients
-        weighted_sse = residuals.T @ W @ residuals
-        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
-
-        return coefficients, std_error
 
     def _calculate_probabilities(
         self,
@@ -147,31 +207,24 @@ class GSSD:
         point_spread: float = 0.0,
         include_draw: bool = True,
     ) -> Tuple[float, float, float]:
-        """
-        Calculate win/draw/loss probabilities using normal distribution.
+        """Calculate win/draw/loss probabilities using normal distribution.
 
         Args:
-            predicted_spread (float): Predicted point spread
-            std_error (float): Standard error of the prediction
+            predicted_spread (float): The predicted point spread.
+            std_error (float): The standard error of the predictions.
             point_spread (float, optional): Point spread adjustment. Defaults to 0.0
-            include_draw (bool, optional): Whether to include draw probability.
-                Defaults to True
+            include_draw (bool, optional): Whether to include draw probability. Defaults to True
 
         Returns:
             Tuple[float, float, float]: Probabilities of (home win, draw, away win)
         """
         if include_draw:
-            prob_home = 1 - stats.norm.cdf(
-                point_spread + 0.5, predicted_spread, std_error
-            )
-            prob_away = stats.norm.cdf(-point_spread - 0.5, predicted_spread, std_error)
-            prob_draw = 1 - prob_home - prob_away
+            thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
+            probs = stats.norm.cdf(thresholds, predicted_spread, std_error)
+            return 1 - probs[0], probs[0] - probs[1], probs[1]
         else:
             prob_home = 1 - stats.norm.cdf(point_spread, predicted_spread, std_error)
-            prob_draw = np.nan
-            prob_away = stats.norm.cdf(-point_spread, predicted_spread, std_error)
-
-        return prob_home, prob_draw, prob_away
+            return prob_home, np.nan, 1 - prob_home
 
     def _calculate_team_statistics(self, df: pd.DataFrame) -> None:
         """
@@ -207,10 +260,32 @@ class GSSD:
             for team in self.teams
         }
 
+    def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
+        """Fit weighted OLS regression using match weights.
+
+        Args:
+            y (np.ndarray): The dependent variable.
+            X (np.ndarray): The independent variables.
+
+        Returns:
+            Tuple[np.ndarray, float]: Coefficients and standard error.
+        """
+        X = np.column_stack((np.ones(len(X)), X))
+        W = np.diag(self.match_weights)
+
+        # Use more efficient matrix operations
+        XtW = X.T @ W
+        coefficients = np.linalg.solve(XtW @ X, XtW @ y)
+        residuals = y - X @ coefficients
+        weighted_sse = residuals.T @ W @ residuals
+        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
+
+        return coefficients, std_error
+
 
 if __name__ == "__main__":
     # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv")  # .loc[:176]
+    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
     df.columns = df.columns.str.lower().str.replace(" ", "_")
     df["game_total"] = df["away_pts"] + df["home_pts"]
     df["goal_difference"] = df["home_pts"] - df["away_pts"]

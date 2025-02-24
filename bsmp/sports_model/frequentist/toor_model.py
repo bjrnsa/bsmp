@@ -3,6 +3,7 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
 
 from bsmp.sports_model.frequentist.bradley_terry_model import BradleyTerry
 from bsmp.sports_model.utils import dixon_coles_weights
@@ -17,11 +18,11 @@ class TOOR(BradleyTerry):
     Bradley-Terry ratings with a team-specific regression approach.
 
     Attributes:
+        Inherits all attributes from BradleyTerry plus:
         team_coefficients (np.ndarray): Team-specific regression coefficients
         home_coefficient (float): Home advantage coefficient
         home_team_coef (float): Home team rating coefficient
         away_team_coef (float): Away team rating coefficient
-        spread_error (float): Standard error of spread predictions
     """
 
     def __init__(
@@ -31,41 +32,55 @@ class TOOR(BradleyTerry):
         match_weights: Optional[np.ndarray] = None,
         home_advantage: float = 0.1,
     ):
-        """
-        Initialize TOOR model.
-
-        Args:
-            df: DataFrame with columns [home_team, away_team, result, goal_difference]
-            ratings_weights: Optional weights for ratings optimization
-            match_weights: Optional weights for match prediction
-            home_advantage: Home field advantage parameter
-        """
+        """Initialize TOOR model."""
         super().__init__(df, ratings_weights, match_weights, home_advantage)
         self.team_coefficients = None
         self.home_coefficient = None
         self.home_team_coef = None
         self.away_team_coef = None
 
-    def fit(self) -> None:
+    def fit(self) -> "TOOR":
         """
         Fit the model in two steps:
         1. Calculate Bradley-Terry ratings
         2. Fit team-specific regression for point spread prediction
         """
-        # Get team ratings from Bradley-Terry model
-        self.best_params = self._optimize_parameters()
-        self.team_ratings = dict(zip(self.teams, self.best_params[:-1]))
+        try:
+            # Get team ratings from Bradley-Terry model
+            self.params = self._optimize_parameters()
 
-        # Prepare data for team-specific regression
-        home_ratings = self._get_team_ratings(self.home_team)
-        away_ratings = self._get_team_ratings(self.away_team)
-        X = np.column_stack((home_ratings, away_ratings))
+            # Optimize the three parameters using least squares
+            initial_guess = np.array(
+                [0.1, 1.0, -1.0]
+            )  # Initial values for [home_adv, home_team, away_team]
+            result = minimize(
+                self._sse_function,
+                initial_guess,
+                method="L-BFGS-B",
+                options={"ftol": 1e-10, "maxiter": 200},
+            )
 
-        # Fit regression model with team-specific coefficients
-        coefficients, self.spread_error = self._fit_ols(self.goal_difference, X)
-        self.home_coefficient, self.home_team_coef, self.away_team_coef = coefficients
+            # Store the optimized coefficients
+            self.home_coefficient = result.x[0]  # home advantage
+            self.home_team_coef = result.x[1]  # home team coefficient
+            self.away_team_coef = result.x[2]  # away team coefficient
 
-        self.fitted = True
+            # Calculate spread error
+            predictions = (
+                self.home_coefficient
+                + self.home_team_coef * self.params[self.home_idx]
+                + self.away_team_coef * self.params[self.away_idx]
+            )
+            (self.intercept, self.spread_coefficient), self.spread_error = (
+                self._fit_ols(self.goal_difference, predictions)
+            )
+
+            self.fitted = True
+            return self
+
+        except Exception as e:
+            self.fitted = False
+            raise ValueError(f"Model fitting failed: {str(e)}") from e
 
     def predict(
         self,
@@ -88,9 +103,15 @@ class TOOR(BradleyTerry):
         """
         if not self.fitted:
             raise ValueError("Model has not been fitted yet.")
+
+        # Validate teams
+        for team in (home_team, away_team):
+            if team not in self.team_map:
+                raise ValueError(f"Unknown team: {team}")
+
         # Get team ratings
-        home_rating = self.team_ratings[home_team]
-        away_rating = self.team_ratings[away_team]
+        home_rating = self.params[self.team_map[home_team]]
+        away_rating = self.params[self.team_map[away_team]]
 
         # Calculate predicted spread using team-specific coefficients
         predicted_spread = (
@@ -102,6 +123,47 @@ class TOOR(BradleyTerry):
         return self._calculate_probabilities(
             predicted_spread, self.spread_error, point_spread, include_draw
         )
+
+    def _optimize_parameters(self) -> np.ndarray:
+        """Optimize model parameters using SLSQP."""
+        result = minimize(
+            fun=lambda p: self._log_likelihood(p) / len(self.result),
+            x0=self.params,
+            method="SLSQP",
+            options={"ftol": 1e-10, "maxiter": 200},
+        )
+        return result.x
+
+    def _sse_function(self, parameters: np.ndarray) -> float:
+        """
+        Calculate sum of squared errors for parameter optimization.
+
+        Args:
+            parameters: Array of [home_advantage, home_team_coef, away_team_coef]
+
+        Returns:
+            float: Sum of squared errors
+        """
+        home_adv, home_team_coef, away_team_coef = parameters
+
+        # Get logistic ratings from Bradley-Terry optimization
+        logistic_ratings = self.params[:-1]  # Exclude home advantage parameter
+
+        # Calculate predictions
+        predictions = (
+            home_adv
+            + home_team_coef * logistic_ratings[self.home_idx]
+            + away_team_coef * logistic_ratings[self.away_idx]
+        )
+
+        # Calculate weighted squared errors
+        errors = self.goal_difference - predictions
+        if hasattr(self, "match_weights"):
+            sse = np.sum(self.match_weights * (errors**2))
+        else:
+            sse = np.sum(errors**2)
+
+        return sse
 
 
 if __name__ == "__main__":
@@ -117,24 +179,12 @@ if __name__ == "__main__":
     np.random.seed(0)
     spread_weights = np.random.uniform(0.1, 1.0, len(df))
 
-    home_team = "Richmond"
-    away_team = "Geelong"
+    home_team = "St Kilda"
+    away_team = "North Melbourne"
 
-    model = TOOR(df, ratings_weights=team_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=15, include_draw=False
-    )
-
-    # Use different weights
-    model = TOOR(df, ratings_weights=team_weights, match_weights=spread_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=15, include_draw=False
-    )
-    # Use no weights
+    # Test with different weight configurations
     model = TOOR(df)
     model.fit()
     prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=15, include_draw=False
+        home_team, away_team, point_spread=0, include_draw=False
     )
