@@ -1,5 +1,6 @@
 # %%
-from typing import Tuple, Union
+import warnings
+from typing import Dict, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -8,27 +9,44 @@ from scipy.optimize import minimize
 
 from bsmp.sports_model.utils import dixon_coles_weights
 
+# Suppress the specific warning
+warnings.filterwarnings(
+    "ignore", message="delta_grad == 0.0. Check if the approximated function is linear."
+)
+
 
 class ZSD:
     """
-    Z-Score Deviation (ZSD) model.
+    Z-Score Deviation (ZSD) model for predicting sports match outcomes.
 
-    A probabilistic model that predicts match outcomes using team-specific ratings and
-    z-score transformations of expected scoring probabilities. The model uses weighted
-    optimization to estimate team performance parameters and calculates win/draw/loss
-    probabilities using a normal distribution.
+    The model uses weighted optimization to estimate team performance parameters and
+    calculates win/draw/loss probabilities using a normal distribution.
 
     Attributes:
         teams (np.ndarray): Unique team identifiers
-        team_map (dict): Mapping of team names to indices
-        home_team_ratings (dict): Home performance ratings for each team
-        away_team_ratings (dict): Away performance ratings for each team
-        home_adj_factor (float): Home team adjustment factor
-        away_adj_factor (float): Away team adjustment factor
-        intercept (float): Model intercept term
-        spread_coefficient (float): Coefficient for spread prediction
-        spread_error (float): Standard error of spread predictions
+        n_teams (int): Number of teams in the dataset
+        team_map (Dict[str, int]): Mapping of team names to indices
+        home_idx (np.ndarray): Indices of home teams
+        away_idx (np.ndarray): Indices of away teams
+        ratings_weights (np.ndarray): Weights for rating optimization
+        match_weights (np.ndarray): Weights for spread prediction
         fitted (bool): Whether the model has been fitted
+        params (np.ndarray): Optimized model parameters after fitting
+            [0:n_teams] - Offensive ratings
+            [n_teams:2*n_teams] - Defensive ratings
+            [-2:] - Home/away adjustment factors
+        mean_home_score (float): Mean home team score
+        std_home_score (float): Standard deviation of home team scores
+        mean_away_score (float): Mean away team score
+        std_away_score (float): Standard deviation of away team scores
+        intercept (float): Spread model intercept
+        spread_coefficient (float): Spread model coefficient
+        spread_error (float): Standard error of spread predictions
+
+    Note:
+        The model ensures that both offensive and defensive ratings sum to zero
+        through optimization constraints, making the ratings interpretable as
+        relative performance measures.
     """
 
     def __init__(
@@ -36,62 +54,71 @@ class ZSD:
         df: pd.DataFrame,
         ratings_weights: Union[np.ndarray, None] = None,
         match_weights: Union[np.ndarray, None] = None,
-    ):
-        """
-        Initialize ZSD model.
+    ) -> None:
+        """Initialize ZSD model."""
+        # Extract numpy arrays once
+        data = {
+            col: df[col].to_numpy()
+            for col in [
+                "home_team",
+                "away_team",
+                "home_pts",
+                "away_pts",
+                "goal_difference",
+            ]
+        }
+        self.__dict__.update(data)  # Add arrays directly to instance
 
-        Args:
-            df (pd.DataFrame): DataFrame containing match data with columns:
-                - home_team: Home team identifier
-                - away_team: Away team identifier
-                - home_pts: Points scored by home team
-                - away_pts: Points scored by away team
-                - goal_difference: home_pts - away_pts
-            match_weights (np.ndarray, optional): Weights for match prediction.
-                If None, equal weights are used.
-        """
-        # Basic setup
-        self.teams = np.unique(df.home_team.to_numpy())
-        self.home_team = df.home_team.to_numpy()
-        self.away_team = df.away_team.to_numpy()
-        self.home_pts = df.home_pts.to_numpy()
-        self.away_pts = df.away_pts.to_numpy()
-        self.goal_difference = df.goal_difference.to_numpy()
+        # Team setup
+        self.teams: np.ndarray = np.unique(self.home_team)
+        self.n_teams: int = len(self.teams)
+        self.team_map: Dict[str, int] = {
+            team: idx for idx, team in enumerate(self.teams)
+        }
+
+        # Create team indices
+        self.home_idx: np.ndarray = np.array(
+            [self.team_map[team] for team in self.home_team]
+        )
+        self.away_idx: np.ndarray = np.array(
+            [self.team_map[team] for team in self.away_team]
+        )
 
         # Set weights
-        n_matches = len(df)
-        self.ratings_weights = (
+        n_matches: int = len(df)
+        self.ratings_weights: np.ndarray = (
             np.ones(n_matches) if ratings_weights is None else ratings_weights
         )
-        self.match_weights = (
+        self.match_weights: np.ndarray = (
             np.ones(n_matches) if match_weights is None else match_weights
         )
 
-        self.team_map = {team: idx for idx, team in enumerate(self.teams)}
+        self.fitted: bool = False
 
-        # Calculate scoring statistics
-        self._calculate_scoring_statistics()
-        self._initialize_parameters()
-        self.fitted = False
-
-    def fit(self):
+    def fit(self, initial_params: Union[np.ndarray, dict, None] = None) -> "ZSD":
         """Fit the ZSD model to the training data."""
-        # Optimize parameters
-        self.params = self._optimize_parameters()
-        self._update_team_ratings()
+        try:
+            if len(self.home_pts) == 0 or len(self.away_pts) == 0:
+                raise ValueError("Empty input data")
 
-        # Calculate predicted points
-        pred_scores = self._calculate_predicted_scores(
-            self.data[:, 0].astype(int), self.data[:, 1].astype(int)
-        )
+            self._calculate_scoring_statistics()
 
-        # Fit spread model
-        raw_mov = pred_scores["home"] - pred_scores["away"]
-        (self.intercept, self.spread_coefficient), self.spread_error = self._fit_ols(
-            self.goal_difference, raw_mov
-        )
+            # Optimize
+            self.params = self._optimize_parameters(initial_params)
 
-        self.fitted = True
+            # Fit spread model
+            pred_scores = self._predict_scores()
+            raw_mov = pred_scores["home"] - pred_scores["away"]
+            (self.intercept, self.spread_coefficient), self.spread_error = (
+                self._fit_ols(self.goal_difference, raw_mov)
+            )
+
+            self.fitted = True
+            return self
+
+        except Exception as e:
+            self.fitted = False
+            raise ValueError(f"Model fitting failed: {str(e)}") from e
 
     def predict(
         self,
@@ -100,209 +127,218 @@ class ZSD:
         point_spread: float = 0.0,
         include_draw: bool = True,
     ) -> Tuple[float, float, float]:
-        """Predict match outcome probabilities."""
+        """
+        Predict match outcome probabilities.
+
+        Args:
+            home_team: Name of the home team
+            away_team: Name of the away team
+            point_spread: Points handicap (default: 0.0)
+            include_draw: Whether to include draw probability (default: True)
+
+        Returns:
+            Tuple[float, float, float]: (home_win_prob, draw_prob, away_win_prob)
+            If include_draw=False, draw_prob will be np.nan
+
+        Raises:
+            ValueError: If model is not fitted or teams are not recognized
+        """
         if not self.fitted:
             raise ValueError("Model has not been fitted yet.")
 
-        # Calculate predicted scores
-        pred_scores = self._calculate_predicted_scores_for_teams(home_team, away_team)
-        predicted_spread = self.intercept + self.spread_coefficient * (
-            pred_scores["home"] - pred_scores["away"]
+        # Validate teams
+        for team in (home_team, away_team):
+            if team not in self.team_map:
+                raise ValueError(f"Unknown team: {team}")
+
+        # Get predicted scores using team indices
+        pred_scores = self._predict_scores(
+            home_idx=self.team_map[home_team], away_idx=self.team_map[away_team]
         )
-        final_spread = self.intercept + self.spread_coefficient * predicted_spread
+
+        # Calculate spread and return probabilities
+        raw_mov = pred_scores["home"] - pred_scores["away"]
+        predicted_spread = self.intercept + self.spread_coefficient * raw_mov
 
         return self._calculate_probabilities(
-            final_spread, self.spread_error, point_spread, include_draw
+            predicted_spread, self.spread_error, point_spread, include_draw
         )
 
-    def _calculate_scoring_statistics(self) -> None:
-        """Calculate and store scoring statistics."""
-        self.mean_home_score = np.mean(self.home_pts)
-        self.mean_away_score = np.mean(self.away_pts)
-        self.std_home_score = np.std(self.home_pts, ddof=1)
-        self.std_away_score = np.std(self.away_pts, ddof=1)
-
-        # Prepare match data array
-        self.data = np.column_stack(
-            [
-                np.array([self.team_map[team] for team in self.home_team]),
-                np.array([self.team_map[team] for team in self.away_team]),
-                self.home_pts,
-                self.away_pts,
-            ]
-        )
-
-    def _initialize_parameters(self) -> None:
-        """Initialize model parameters."""
-        n_teams = len(self.teams)
-        self.home_team_ratings = dict.fromkeys(self.teams, 1.0)
-        self.away_team_ratings = dict.fromkeys(self.teams, 1.0)
-        self.params = np.concatenate(
-            [
-                np.ones(n_teams),  # home ratings
-                np.ones(n_teams),  # away ratings
-                np.array([0.0, 0.0]),  # adjustment factors
-            ]
-        )
-
-    def _calculate_predicted_scores(self, home_idx, away_idx) -> dict:
-        """Calculate predicted scores for given team indices."""
-        home_home, away_away, home_away, away_home = self._get_ratings(
-            self.params[: len(self.teams)],
-            self.params[len(self.teams) : 2 * len(self.teams)],
-            home_idx,
-            away_idx,
-        )
-
-        scores = {}
-        for key, adj, h_rat, a_rat in [
-            ("home", self.home_adj_factor, home_home, away_away),
-            ("away", self.away_adj_factor, away_home, home_away),
-        ]:
-            param = self._parameter_estimate(adj, h_rat, a_rat)
-            exp_prob = self._logit_transform(param)
-            z_score = self._z_inverse(exp_prob)
-            scores[key] = self._points_prediction(
-                getattr(self, f"mean_{key}_score"),
-                getattr(self, f"std_{key}_score"),
-                z_score,
-            )
-        return scores
-
-    def _calculate_predicted_scores_for_teams(
-        self, home_team: str, away_team: str
-    ) -> dict:
-        """Calculate predicted scores for specific teams."""
-        param_h = self._parameter_estimate(
-            self.home_adj_factor,
-            self.home_team_ratings[home_team],
-            self.home_team_ratings[away_team],
-        )
-        param_a = self._parameter_estimate(
-            self.away_adj_factor,
-            self.away_team_ratings[home_team],
-            self.away_team_ratings[away_team],
-        )
-
-        scores = {}
-        for key, param in [("home", param_h), ("away", param_a)]:
-            exp_prob = self._logit_transform(param)
-            z_score = self._z_inverse(exp_prob)
-            scores[key] = self._points_prediction(
-                getattr(self, f"mean_{key}_score"),
-                getattr(self, f"std_{key}_score"),
-                z_score,
-            )
-        return scores
-
-    def _update_team_ratings(self) -> None:
-        """Update team ratings from optimized parameters."""
-        n_teams = len(self.teams)
-        self.home_team_ratings = dict(zip(self.teams, self.params[:n_teams]))
-        self.away_team_ratings = dict(
-            zip(self.teams, self.params[n_teams : 2 * n_teams])
-        )
-        self.home_adj_factor, self.away_adj_factor = self.params[-2:]
-
-    def _optimize_parameters(self) -> np.ndarray:
+    def _optimize_parameters(
+        self, initial_params: Union[np.ndarray, dict, None] = None
+    ) -> np.ndarray:
         """
-        Optimize model parameters using the SLSQP algorithm.
+        Optimize model parameters using SLSQP optimization.
+
+        Args:
+            initial_params: Optional initial parameter values
 
         Returns:
-            np.ndarray: Optimized parameters [home_ratings, away_ratings, adj_factors]
+            np.ndarray: Optimized parameters
+
+        Raises:
+            RuntimeError: If optimization fails
         """
-        # Constraint: mean team rating = 0 for identifiability
-        n_teams = len(self.teams)
         constraints = [
-            {"type": "eq", "fun": lambda p: np.mean(p[:n_teams])},
+            {"type": "eq", "fun": lambda p: np.mean(p[: self.n_teams])},
             {
                 "type": "eq",
-                "fun": lambda p: np.mean(p[n_teams : 2 * n_teams]),
+                "fun": lambda p: np.mean(p[self.n_teams : 2 * self.n_teams]),
             },
         ]
 
-        # Add bounds to prevent numerical overflow
-        bounds = [(-5, 5)] * (2 * n_teams)  # bounds for team ratings
-        bounds.extend([(-2, 2)] * 2)  # bounds for adjustment factors
+        bounds = [(-50, 50)] * (2 * self.n_teams) + [(-np.inf, np.inf)] * 2
+        x0 = self._get_initial_params(initial_params)
 
         result = minimize(
-            fun=lambda p: self._sse_function(p, self.data, self.ratings_weights),
-            x0=self.params,
+            fun=self._sse_function,
+            x0=x0,
             method="SLSQP",
+            constraints=constraints,
             bounds=bounds,
-            # constraints=constraints,
-            options={"ftol": 1e-10, "maxiter": 200},
+            options={"maxiter": 100000, "ftol": 1e-8},
         )
+
+        if not result.success:
+            raise RuntimeError(f"Optimization failed: {result.message}")
 
         return result.x
 
-    def _sse_function(
-        self, params: np.ndarray, data: np.ndarray, weights: np.ndarray
-    ) -> float:
+    def _sse_function(self, params) -> float:
         """Calculate the weighted sum of squared errors for given parameters."""
-        n_teams = len(self.teams)
-        home_ratings, away_ratings = params[:n_teams], params[n_teams : 2 * n_teams]
-        home_adj_factor, away_adj_factor = params[-2:]
+        # Unpack parameters efficiently
+        pred_scores = self._predict_scores(
+            self.home_idx,
+            self.away_idx,
+            *np.split(params, [self.n_teams, 2 * self.n_teams]),
+        )
+        squared_errors = (self.home_pts - pred_scores["home"]) ** 2 + (
+            self.away_pts - pred_scores["away"]
+        ) ** 2
+        return np.sum(self.ratings_weights * squared_errors)
 
-        # Get match data
-        home_idx, away_idx = data[:, 0].astype(int), data[:, 1].astype(int)
-        actual_scores = {"home": data[:, 2], "away": data[:, 3]}
+    def _predict_scores(
+        self,
+        home_idx: Union[int, np.ndarray, None] = None,
+        away_idx: Union[int, np.ndarray, None] = None,
+        offense_ratings: Union[np.ndarray, None] = None,
+        defense_ratings: Union[np.ndarray, None] = None,
+        factors: Union[Tuple[float, float], None] = None,
+    ) -> Dict[str, np.ndarray]:
+        """
+        Calculate predicted scores using team ratings and factors.
 
-        # Get team ratings and calculate predictions
-        ratings = self._get_ratings(home_ratings, away_ratings, home_idx, away_idx)
-        pred_scores = {}
+        Args:
+            home_idx: Index(es) of home team(s)
+            away_idx: Index(es) of away team(s)
+            offense_ratings: Optional offensive ratings to use
+            defense_ratings: Optional defensive ratings to use
+            factors: Optional (home_factor, away_factor) tuple
 
-        for key, (adj, h_rat, a_rat) in [
-            ("home", (home_adj_factor, ratings[0], ratings[1])),
-            ("away", (away_adj_factor, ratings[2], ratings[3])),
-        ]:
-            param = self._parameter_estimate(adj, h_rat, a_rat)
-            z_score = self._z_inverse(self._logit_transform(param))
-            pred_scores[key] = self._points_prediction(
-                getattr(self, f"mean_{key}_score"),
-                getattr(self, f"std_{key}_score"),
-                z_score,
+        Returns:
+            Dict with 'home' and 'away' predicted scores
+        """
+        if factors is None:
+            factors = self.params[-2:]
+
+        ratings = self._get_team_ratings(
+            home_idx, away_idx, offense_ratings, defense_ratings
+        )
+
+        return {
+            "home": self._transform_to_score(
+                self._parameter_estimate(
+                    factors[0], ratings["home_offense"], ratings["away_offense"]
+                ),
+                self.mean_home_score,
+                self.std_home_score,
+            ),
+            "away": self._transform_to_score(
+                self._parameter_estimate(
+                    factors[1], ratings["home_defense"], ratings["away_defense"]
+                ),
+                self.mean_away_score,
+                self.std_away_score,
+            ),
+        }
+
+    def _get_team_ratings(
+        self,
+        home_idx: Union[int, np.ndarray, None],
+        away_idx: Union[int, np.ndarray, None],
+        offense_ratings: Union[np.ndarray, None] = None,
+        defense_ratings: Union[np.ndarray, None] = None,
+    ) -> Dict[str, np.ndarray]:
+        """Extract team ratings from parameters."""
+        if offense_ratings is None:
+            offense_ratings, defense_ratings = np.split(
+                self.params[: 2 * self.n_teams], 2
             )
+        if home_idx is None:
+            home_idx, away_idx = self.home_idx, self.away_idx
 
-        # Calculate weighted SSE
-        errors = sum((actual_scores[k] - pred_scores[k]) ** 2 for k in ["home", "away"])
-        return np.sum(weights * errors)
+        return {
+            "home_offense": offense_ratings[home_idx],
+            "home_defense": defense_ratings[home_idx],
+            "away_offense": offense_ratings[away_idx],
+            "away_defense": defense_ratings[away_idx],
+        }
 
-    def _get_ratings(self, home_ratings, away_ratings, home_team_idx, away_team_idx):
-        home_home = home_ratings[home_team_idx]
-        away_away = away_ratings[away_team_idx]
-        home_away = home_ratings[away_team_idx]
-        away_home = away_ratings[home_team_idx]
-        return home_home, away_away, home_away, away_home
+    def _parameter_estimate(
+        self, adj_factor: float, offense_rating: np.ndarray, defense_rating: np.ndarray
+    ) -> np.ndarray:
+        """Calculate parameter estimate for score prediction."""
+        return adj_factor + offense_rating - defense_rating
 
-    def _points_prediction(self, mean_score, std_score, z_score):
-        return mean_score + std_score * z_score
+    def _transform_to_score(
+        self, param: np.ndarray, mean: float, std: float
+    ) -> np.ndarray:
+        """Transform parameter to actual score prediction."""
+        exp_prob = self._logit_transform(param)
+        z_score = self._z_inverse(exp_prob)
+        return mean + std * z_score
 
-    def _parameter_estimate(self, adj_factor, home_ratings, away_ratings):
-        return adj_factor + home_ratings - away_ratings
-
-    def _z_inverse(self, z: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        return stats.norm.ppf(z)
+    def _z_inverse(self, prob: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
+        """Calculate inverse of standard normal CDF."""
+        return stats.norm.ppf(prob)
 
     def _logit_transform(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         """Apply logistic transformation."""
         return 1 / (1 + np.exp(-x))
 
+    def _points_prediction(self, mean_score, std_score, z_score):
+        return mean_score + std_score * z_score
+
+    def _calculate_scoring_statistics(self) -> None:
+        """Calculate and store scoring statistics for home and away teams."""
+        # Calculate all statistics in one pass using numpy
+        home_stats: np.ndarray = np.array(
+            [np.mean(self.home_pts), np.std(self.home_pts, ddof=1)]
+        )
+        away_stats: np.ndarray = np.array(
+            [np.mean(self.away_pts), np.std(self.away_pts, ddof=1)]
+        )
+
+        # Unpack results
+        self.mean_home_score: float = home_stats[0]
+        self.std_home_score: float = home_stats[1]
+        self.mean_away_score: float = away_stats[0]
+        self.std_away_score: float = away_stats[1]
+
+        # Validate statistics
+        if not (self.std_home_score > 0 and self.std_away_score > 0):
+            raise ValueError(
+                "Invalid scoring statistics: zero or negative standard deviation"
+            )
+
     def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Fit weighted OLS regression using match weights.
-
-        Args:
-            y (np.ndarray): Target variable (goal differences)
-            X (np.ndarray): Feature matrix of team statistics
-
-        Returns:
-            Tuple[np.ndarray, float]: Model coefficients and standard error
-        """
+        """Fit weighted OLS regression using match weights."""
         X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights)  # Using match_weights for OLS
+        W = np.diag(self.match_weights)
 
-        coefficients = np.linalg.inv(X.T @ W @ X) @ X.T @ W @ y
+        # Use more efficient matrix operations
+        XtW = X.T @ W
+        coefficients = np.linalg.solve(XtW @ X, XtW @ y)
         residuals = y - X @ coefficients
         weighted_sse = residuals.T @ W @ residuals
         std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
@@ -316,36 +352,132 @@ class ZSD:
         point_spread: float = 0.0,
         include_draw: bool = True,
     ) -> Tuple[float, float, float]:
-        """
-        Calculate win/draw/loss probabilities using normal distribution.
-
-        Args:
-            predicted_spread (float): Predicted point spread
-            std_error (float): Standard error of the prediction
-            point_spread (float, optional): Point spread adjustment. Defaults to 0.0
-            include_draw (bool, optional): Whether to include draw probability.
-                Defaults to True
-
-        Returns:
-            Tuple[float, float, float]: Probabilities of (home win, draw, away win)
-        """
+        """Calculate win/draw/loss probabilities using normal distribution."""
         if include_draw:
-            prob_home = 1 - stats.norm.cdf(
-                point_spread + 0.5, predicted_spread, std_error
-            )
-            prob_away = stats.norm.cdf(-point_spread - 0.5, predicted_spread, std_error)
-            prob_draw = 1 - prob_home - prob_away
+            thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
+            probs = stats.norm.cdf(thresholds, predicted_spread, std_error)
+            return 1 - probs[0], probs[0] - probs[1], probs[1]
         else:
             prob_home = 1 - stats.norm.cdf(point_spread, predicted_spread, std_error)
-            prob_away = stats.norm.cdf(-point_spread, predicted_spread, std_error)
-            prob_draw = np.nan
+            return prob_home, np.nan, 1 - prob_home
 
-        return prob_home, prob_draw, prob_away
+    def _get_initial_params(
+        self, initial_params: Union[np.ndarray, dict, None]
+    ) -> np.ndarray:
+        """
+        Generate initial parameters, incorporating any provided values.
+
+        Args:
+            initial_params: Optional initial parameter values as either:
+                - np.ndarray: Full parameter vector of length 2*n_teams + 2
+                - dict: Parameters with keys:
+                    'teams': list of team names in order
+                    'offense': list of offensive ratings
+                    'defense': list of defensive ratings
+                    'factors': tuple of (home_factor, away_factor)
+                - None: Use random initialization
+
+        Returns:
+            np.ndarray: Complete parameter vector
+
+        Raises:
+            ValueError: If parameters are invalid or don't match teams
+        """
+        if initial_params is None:
+            return np.random.normal(0, 0.1, 2 * self.n_teams + 2)
+
+        if isinstance(initial_params, np.ndarray):
+            if len(initial_params) != 2 * self.n_teams + 2:
+                raise ValueError(f"Expected {2 * self.n_teams + 2} parameters")
+            return initial_params.copy()
+
+        if not isinstance(initial_params, dict):
+            raise ValueError("initial_params must be array, dict, or None")
+
+        # Verify teams match
+        if "teams" not in initial_params:
+            raise ValueError("Missing 'teams' in initial_params")
+        if set(initial_params["teams"]) != set(self.teams):
+            raise ValueError("Provided teams don't match model teams")
+
+        # Create parameter vector
+        x0 = np.zeros(2 * self.n_teams + 2)
+
+        # Map parameters according to team order
+        team_indices = {team: i for i, team in enumerate(initial_params["teams"])}
+        model_indices = {i: team_indices[team] for i, team in enumerate(self.teams)}
+
+        # Set offensive ratings
+        if "offense" in initial_params:
+            offense = initial_params["offense"]
+            if len(offense) != self.n_teams:
+                raise ValueError(f"Expected {self.n_teams} offensive ratings")
+            for i in range(self.n_teams):
+                x0[i] = offense[model_indices[i]]
+
+        # Set defensive ratings
+        if "defense" in initial_params:
+            defense = initial_params["defense"]
+            if len(defense) != self.n_teams:
+                raise ValueError(f"Expected {self.n_teams} defensive ratings")
+            for i in range(self.n_teams):
+                x0[i + self.n_teams] = defense[model_indices[i]]
+
+        # Set factors
+        if "factors" in initial_params:
+            factors = initial_params["factors"]
+            if len(factors) != 2:
+                raise ValueError("Expected 2 factors (home, away)")
+            x0[-2:] = factors
+
+        return x0
+
+    def get_team_ratings(self) -> pd.DataFrame:
+        """
+        Get team ratings as a DataFrame.
+
+        Returns:
+            pd.DataFrame: Team ratings with columns ['team', 'offense', 'defense']
+
+        Raises:
+            ValueError: If model hasn't been fitted yet
+        """
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
+
+        offense_ratings = self.params[: self.n_teams]
+        defense_ratings = self.params[self.n_teams : 2 * self.n_teams]
+
+        return pd.DataFrame(
+            {"team": self.teams, "offense": offense_ratings, "defense": defense_ratings}
+        ).set_index("team")
+
+    def get_team_rating(self, team: str) -> Dict[str, float]:
+        """
+        Get ratings for a specific team.
+
+        Args:
+            team: Name of the team
+
+        Returns:
+            Dict with keys 'offense' and 'defense'
+
+        Raises:
+            ValueError: If team not found or model not fitted
+        """
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
+
+        if team not in self.team_map:
+            raise ValueError(f"Unknown team: {team}")
+
+        idx = self.team_map[team]
+        return {"offense": self.params[idx], "defense": self.params[idx + self.n_teams]}
 
 
 if __name__ == "__main__":
     # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv")  # .loc[:176]
+    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
     df.columns = df.columns.str.lower().str.replace(" ", "_")
     df["game_total"] = df["away_pts"] + df["home_pts"]
     df["goal_difference"] = df["home_pts"] - df["away_pts"]
@@ -366,16 +498,5 @@ if __name__ == "__main__":
         home_team, away_team, point_spread=0, include_draw=False
     )
 
-    model = ZSD(df, ratings_weights=team_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
-    )
-    # Use different weights
-    model = ZSD(df, ratings_weights=team_weights, match_weights=spread_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
-    )
 
 # %%
