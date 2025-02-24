@@ -98,9 +98,10 @@ class BradleyTerry:
         away_team: str,
         point_spread: float = 0.0,
         include_draw: bool = True,
-    ) -> Tuple[float, float, float]:
+        return_spread: bool = False,
+    ) -> Union[Tuple[float, float, float], float]:
         """
-        Predict match outcome probabilities.
+        Predict match outcome probabilities or spread.
 
         Args:
             home_team: Name of home team
@@ -128,19 +129,12 @@ class BradleyTerry:
         # Calculate predicted spread
         predicted_spread = self.intercept + self.spread_coefficient * rating_diff
 
+        if return_spread:
+            return predicted_spread
+
         return self._calculate_probabilities(
             predicted_spread, self.spread_error, point_spread, include_draw
         )
-
-    def _optimize_parameters(self) -> np.ndarray:
-        """Optimize model parameters using SLSQP."""
-        result = minimize(
-            fun=lambda p: self._log_likelihood(p) / len(self.result),
-            x0=self.params,
-            method="SLSQP",
-            options={"ftol": 1e-10, "maxiter": 200},
-        )
-        return result.x
 
     def _log_likelihood(self, params: np.ndarray) -> float:
         """Calculate negative log likelihood for parameter optimization."""
@@ -148,6 +142,7 @@ class BradleyTerry:
         home_advantage = params[-1]
         log_likelihood = 0.0
 
+        # Precompute home and away ratings
         home_ratings = ratings[self.home_idx]
         away_ratings = ratings[self.away_idx]
         win_probs = self._logit_transform(home_advantage + home_ratings - away_ratings)
@@ -169,6 +164,16 @@ class BradleyTerry:
         )
 
         return -log_likelihood
+
+    def _optimize_parameters(self) -> np.ndarray:
+        """Optimize model parameters using SLSQP."""
+        result = minimize(
+            fun=lambda p: self._log_likelihood(p) / len(self.result),
+            x0=self.params,
+            method="SLSQP",
+            options={"ftol": 1e-10, "maxiter": 200},
+        )
+        return result.x
 
     def _get_rating_difference(
         self,

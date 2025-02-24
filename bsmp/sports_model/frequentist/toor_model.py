@@ -1,5 +1,5 @@
 # %%
-from typing import Optional
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -88,7 +88,8 @@ class TOOR(BradleyTerry):
         away_team: str,
         point_spread: float = 0.0,
         include_draw: bool = True,
-    ) -> tuple:
+        return_spread: bool = False,
+    ) -> Union[Tuple[float, float, float], float]:
         """
         Predict match outcome probabilities using team-specific coefficients.
 
@@ -119,6 +120,8 @@ class TOOR(BradleyTerry):
             + self.home_team_coef * home_rating
             + self.away_team_coef * away_rating
         )
+        if return_spread:
+            return predicted_spread
 
         return self._calculate_probabilities(
             predicted_spread, self.spread_error, point_spread, include_draw

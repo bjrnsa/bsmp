@@ -126,22 +126,21 @@ class ZSD:
         away_team: str,
         point_spread: float = 0.0,
         include_draw: bool = True,
-    ) -> Tuple[float, float, float]:
+        return_spread: bool = False,
+    ) -> Union[Tuple[float, float, float], float]:
         """
-        Predict match outcome probabilities.
+        Predict match outcome probabilities or spread.
 
         Args:
             home_team: Name of the home team
             away_team: Name of the away team
             point_spread: Points handicap (default: 0.0)
             include_draw: Whether to include draw probability (default: True)
+            return_spread: If True, return predicted spread instead of probabilities (default: False)
 
         Returns:
-            Tuple[float, float, float]: (home_win_prob, draw_prob, away_win_prob)
-            If include_draw=False, draw_prob will be np.nan
-
-        Raises:
-            ValueError: If model is not fitted or teams are not recognized
+            If return_spread=False: Tuple[float, float, float] (home_win_prob, draw_prob, away_win_prob)
+            If return_spread=True: float (predicted spread)
         """
         if not self.fitted:
             raise ValueError("Model has not been fitted yet.")
@@ -156,9 +155,12 @@ class ZSD:
             home_idx=self.team_map[home_team], away_idx=self.team_map[away_team]
         )
 
-        # Calculate spread and return probabilities
+        # Calculate spread
         raw_mov = pred_scores["home"] - pred_scores["away"]
         predicted_spread = self.intercept + self.spread_coefficient * raw_mov
+
+        if return_spread:
+            return predicted_spread
 
         return self._calculate_probabilities(
             predicted_spread, self.spread_error, point_spread, include_draw

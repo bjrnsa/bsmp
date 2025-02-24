@@ -162,9 +162,10 @@ class GSSD:
         away_team: str,
         point_spread: float = 0.0,
         include_draw: bool = True,
-    ) -> Tuple[float, float, float]:
+        return_spread: bool = False,
+    ) -> Union[Tuple[float, float, float], float]:
         """
-        Predict match outcome probabilities.
+        Predict match outcome probabilities or spread.
 
         Args:
             home_team (str): Name of the home team
@@ -192,6 +193,9 @@ class GSSD:
         )
 
         predicted_spread = self.intercept + self.spread_coefficient * predicted_spread
+
+        if return_spread:
+            return predicted_spread
 
         return self._calculate_probabilities(
             predicted_spread=predicted_spread,
