@@ -1,11 +1,12 @@
 # %%
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 from scipy import stats
 from scipy.optimize import minimize
 
+from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.utils import dixon_coles_weights
 
 
@@ -29,8 +30,13 @@ class GSSD:
         paa_coeff (float): Coefficient for away team's defensive rating
     """
 
+    NAME = "GSSD"
+
     def __init__(
-        self, df: pd.DataFrame, match_weights: Union[np.ndarray, None] = None
+        self,
+        df: pd.DataFrame,
+        ratings_weights: Optional[np.ndarray] = None,
+        match_weights: Optional[np.ndarray] = None,
     ) -> None:
         """
         Initialize GSSD model.
@@ -39,9 +45,9 @@ class GSSD:
             df (pd.DataFrame): DataFrame containing match data with columns:
                 - home_team: Home team identifier
                 - away_team: Away team identifier
-                - home_pts: Points scored by home team
-                - away_pts: Points scored by away team
-                - goal_difference: home_pts - away_pts
+                - home_goals: Points scored by home team
+                - away_goals: Points scored by away team
+                - goal_difference: home_goals - away_goals
             match_weights (np.ndarray, optional): Weights for match prediction.
                 If None, equal weights are used.
         """
@@ -62,6 +68,9 @@ class GSSD:
         self.away_idx = np.array([self.team_map[team] for team in self.away_team])
 
         # Set weights
+        self.ratings_weights = (
+            np.ones(len(df)) if ratings_weights is None else ratings_weights
+        )
         self.match_weights = (
             np.ones(len(df)) if match_weights is None else match_weights
         )
@@ -135,7 +144,7 @@ class GSSD:
 
         # Calculate weighted squared errors
         errors = self.goal_difference - predictions
-        sse = np.sum(self.match_weights * (errors**2))
+        sse = np.sum(self.ratings_weights * (errors**2))
 
         return sse
 
@@ -239,26 +248,26 @@ class GSSD:
         """
         # Calculate mean points for home/away scenarios
         home_stats = df.groupby("home_team").agg(
-            {"home_pts": "mean", "away_pts": "mean"}
+            {"home_goals": "mean", "away_goals": "mean"}
         )
         away_stats = df.groupby("away_team").agg(
-            {"away_pts": "mean", "home_pts": "mean"}
+            {"away_goals": "mean", "home_goals": "mean"}
         )
 
         # Store transformed statistics
-        self.pfh = df.groupby("home_team")["home_pts"].transform("mean").to_numpy()
-        self.pah = df.groupby("home_team")["away_pts"].transform("mean").to_numpy()
-        self.pfa = df.groupby("away_team")["away_pts"].transform("mean").to_numpy()
-        self.paa = df.groupby("away_team")["home_pts"].transform("mean").to_numpy()
+        self.pfh = df.groupby("home_team")["home_goals"].transform("mean").to_numpy()
+        self.pah = df.groupby("home_team")["away_goals"].transform("mean").to_numpy()
+        self.pfa = df.groupby("away_team")["away_goals"].transform("mean").to_numpy()
+        self.paa = df.groupby("away_team")["home_goals"].transform("mean").to_numpy()
 
         # Create team ratings dictionary
         self.team_ratings = {
             team: np.array(
                 [
-                    home_stats.loc[team, "home_pts"],
-                    home_stats.loc[team, "away_pts"],
-                    away_stats.loc[team, "away_pts"],
-                    away_stats.loc[team, "home_pts"],
+                    home_stats.loc[team, "home_goals"],
+                    home_stats.loc[team, "away_goals"],
+                    away_stats.loc[team, "away_goals"],
+                    away_stats.loc[team, "home_goals"],
                 ]
             )
             for team in self.teams
@@ -286,38 +295,46 @@ class GSSD:
 
         return coefficients, std_error
 
+    def get_team_ratings(self) -> pd.DataFrame:
+        """Get team ratings as a DataFrame."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
+
+        return pd.DataFrame(
+            self.team_ratings, index=["pfh", "pah", "pfa", "paa"]
+        ).T.round(2)
+
+    def get_team_rating(self, team: str) -> float:
+        """Get rating for a specific team."""
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
+
+        #  Return ratings first two decimals
+        return np.round(self.team_ratings[team], 2)
+
 
 if __name__ == "__main__":
-    # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
-    df["game_total"] = df["away_pts"] + df["home_pts"]
-    df["goal_difference"] = df["home_pts"] - df["away_pts"]
-    df["result"] = np.where(df["goal_difference"] > 0, 1, -1)
+    loader = MatchDataLoader(sport="handball")
+    df = loader.load_matches(
+        league="Herre Handbold Ligaen",
+        seasons=["2024/2025"],
+    )
+    team_weights = dixon_coles_weights(df.datetime)
 
-    df["date"] = pd.to_datetime(df["date"], format="%b %d (%a %I:%M%p)")
-    team_weights = dixon_coles_weights(df.date)
-    np.random.seed(0)
-    spread_weights = np.random.uniform(0.1, 1.0, len(df))
+    home_team = "GOG"
+    away_team = "Mors"
 
-    home_team = "St Kilda"
-    away_team = "North Melbourne"
-
-    # Use no weights
-    model = GSSD(df)
+    model = GSSD(df, ratings_weights=team_weights)
     model.fit()
     prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
+        home_team, away_team, point_spread=2, include_draw=True
     )
+    print(f"Home win probability: {prob_home}")
+    print(f"Draw probability: {prob_draw}")
+    print(f"Away win probability: {prob_away}")
+    print(f"Home rating: {model.get_team_rating(home_team)}")
+    print(f"Away rating: {model.get_team_rating(away_team)}")
 
-    model = GSSD(df, match_weights=team_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
-    )
-    # Use different weights
-    model = GSSD(df, match_weights=spread_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
-    )
+# %%
+
+# %%

@@ -5,6 +5,7 @@ from typing import Dict, Tuple, Union
 import numpy as np
 import pandas as pd
 
+from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.frequentist.zsd_model import ZSD
 from bsmp.sports_model.utils import dixon_coles_weights
 
@@ -22,6 +23,8 @@ class PRP(ZSD):
     Score prediction uses a simple additive model:
     score = adj_factor + offense - defense + avg_score
     """
+
+    NAME = "PRP"
 
     def __init__(
         self,
@@ -123,26 +126,67 @@ class PRP(ZSD):
             (factor * home_advantage) + (offense_ratings + defense_ratings) + avg_score
         )
 
+    def get_team_ratings(self) -> pd.DataFrame:
+        """
+        Get team ratings as a DataFrame.
+
+        Returns:
+            pd.DataFrame: Team ratings with columns ['team', 'offense', 'defense']
+
+        Raises:
+            ValueError: If model hasn't been fitted yet
+        """
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
+
+        offense_ratings = self.params[: self.n_teams]
+        defense_ratings = self.params[self.n_teams : 2 * self.n_teams]
+
+        return pd.DataFrame(
+            {"team": self.teams, "offense": offense_ratings, "defense": defense_ratings}
+        ).set_index("team")
+
+    def get_team_rating(self, team: str) -> float:
+        """
+        Get ratings for a specific team.
+
+        Args:
+            team: Name of the team
+
+        Returns:
+            Dict with keys 'offense' and 'defense'
+
+        Raises:
+            ValueError: If team not found or model not fitted
+        """
+        if not self.fitted:
+            raise ValueError("Model has not been fitted yet.")
+
+        if team not in self.team_map:
+            raise ValueError(f"Unknown team: {team}")
+
+        idx = self.team_map[team]
+        return {"offense": self.params[idx], "defense": self.params[idx + self.n_teams]}
+
 
 if __name__ == "__main__":
-    # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
-    df["game_total"] = df["away_pts"] + df["home_pts"]
-    df["goal_difference"] = df["home_pts"] - df["away_pts"]
-    df["result"] = np.where(df["goal_difference"] > 0, 1, -1)
+    loader = MatchDataLoader(sport="handball")
+    df = loader.load_matches(
+        league="Herre Handbold Ligaen",
+        seasons=["2024/2025"],
+    )
+    team_weights = dixon_coles_weights(df.datetime)
 
-    df["date"] = pd.to_datetime(df["date"], format="%b %d (%a %I:%M%p)")
-    team_weights = dixon_coles_weights(df.date, xi=0.08)
-    np.random.seed(0)
-    spread_weights = np.random.uniform(0.1, 1.0, len(df))
+    home_team = "GOG"
+    away_team = "Mors"
 
-    home_team = "St Kilda"
-    away_team = "North Melbourne"
-
-    # Use no weights
-    model = PRP(df)
+    model = PRP(df, ratings_weights=team_weights)
     model.fit()
     prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
+        home_team, away_team, point_spread=2, include_draw=True
     )
+    print(f"Home win probability: {prob_home}")
+    print(f"Draw probability: {prob_draw}")
+    print(f"Away win probability: {prob_away}")
+    print(f"Home ratings: {model.get_team_rating(home_team)}")
+    print(f"Away ratings: {model.get_team_rating(away_team)}")

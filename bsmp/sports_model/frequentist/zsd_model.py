@@ -7,6 +7,7 @@ import pandas as pd
 from scipy import stats
 from scipy.optimize import minimize
 
+from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.utils import dixon_coles_weights
 
 # Suppress the specific warning
@@ -49,6 +50,8 @@ class ZSD:
         relative performance measures.
     """
 
+    NAME = "ZSD"
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -62,8 +65,8 @@ class ZSD:
             for col in [
                 "home_team",
                 "away_team",
-                "home_pts",
-                "away_pts",
+                "home_goals",
+                "away_goals",
                 "goal_difference",
             ]
         }
@@ -98,7 +101,7 @@ class ZSD:
     def fit(self, initial_params: Union[np.ndarray, dict, None] = None) -> "ZSD":
         """Fit the ZSD model to the training data."""
         try:
-            if len(self.home_pts) == 0 or len(self.away_pts) == 0:
+            if len(self.home_goals) == 0 or len(self.away_goals) == 0:
                 raise ValueError("Empty input data")
 
             self._calculate_scoring_statistics()
@@ -214,8 +217,8 @@ class ZSD:
             self.away_idx,
             *np.split(params, [self.n_teams, 2 * self.n_teams]),
         )
-        squared_errors = (self.home_pts - pred_scores["home"]) ** 2 + (
-            self.away_pts - pred_scores["away"]
+        squared_errors = (self.home_goals - pred_scores["home"]) ** 2 + (
+            self.away_goals - pred_scores["away"]
         ) ** 2
         return np.sum(self.ratings_weights * squared_errors)
 
@@ -223,8 +226,8 @@ class ZSD:
         self,
         home_idx: Union[int, np.ndarray, None] = None,
         away_idx: Union[int, np.ndarray, None] = None,
-        offense_ratings: Union[np.ndarray, None] = None,
-        defense_ratings: Union[np.ndarray, None] = None,
+        home_ratings: Union[np.ndarray, None] = None,
+        away_ratings: Union[np.ndarray, None] = None,
         factors: Union[Tuple[float, float], None] = None,
     ) -> Dict[str, np.ndarray]:
         """
@@ -233,8 +236,8 @@ class ZSD:
         Args:
             home_idx: Index(es) of home team(s)
             away_idx: Index(es) of away team(s)
-            offense_ratings: Optional offensive ratings to use
-            defense_ratings: Optional defensive ratings to use
+            home_ratings: Optional home ratings to use
+            away_ratings: Optional away ratings to use
             factors: Optional (home_factor, away_factor) tuple
 
         Returns:
@@ -243,9 +246,7 @@ class ZSD:
         if factors is None:
             factors = self.params[-2:]
 
-        ratings = self._get_team_ratings(
-            home_idx, away_idx, offense_ratings, defense_ratings
-        )
+        ratings = self._get_team_ratings(home_idx, away_idx, home_ratings, away_ratings)
 
         return {
             "home": self._transform_to_score(
@@ -268,29 +269,27 @@ class ZSD:
         self,
         home_idx: Union[int, np.ndarray, None],
         away_idx: Union[int, np.ndarray, None],
-        offense_ratings: Union[np.ndarray, None] = None,
-        defense_ratings: Union[np.ndarray, None] = None,
+        home_ratings: Union[np.ndarray, None] = None,
+        away_ratings: Union[np.ndarray, None] = None,
     ) -> Dict[str, np.ndarray]:
         """Extract team ratings from parameters."""
-        if offense_ratings is None:
-            offense_ratings, defense_ratings = np.split(
-                self.params[: 2 * self.n_teams], 2
-            )
+        if home_ratings is None:
+            home_ratings, away_ratings = np.split(self.params[: 2 * self.n_teams], 2)
         if home_idx is None:
             home_idx, away_idx = self.home_idx, self.away_idx
 
         return {
-            "home_offense": offense_ratings[home_idx],
-            "home_defense": defense_ratings[home_idx],
-            "away_offense": offense_ratings[away_idx],
-            "away_defense": defense_ratings[away_idx],
+            "home_offense": home_ratings[home_idx],
+            "home_defense": away_ratings[home_idx],
+            "away_offense": home_ratings[away_idx],
+            "away_defense": away_ratings[away_idx],
         }
 
     def _parameter_estimate(
-        self, adj_factor: float, offense_rating: np.ndarray, defense_rating: np.ndarray
+        self, adj_factor: float, home_rating: np.ndarray, away_rating: np.ndarray
     ) -> np.ndarray:
         """Calculate parameter estimate for score prediction."""
-        return adj_factor + offense_rating - defense_rating
+        return adj_factor + home_rating - away_rating
 
     def _transform_to_score(
         self, param: np.ndarray, mean: float, std: float
@@ -305,8 +304,10 @@ class ZSD:
         return stats.norm.ppf(prob)
 
     def _logit_transform(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """Apply logistic transformation."""
-        return 1 / (1 + np.exp(-x))
+        """Apply logistic transformation with numerical stability."""
+        # Clip values to avoid overflow
+        x_clipped = np.clip(x, -700, 700)  # exp(700) is close to float max
+        return 1 / (1 + np.exp(-x_clipped))
 
     def _points_prediction(self, mean_score, std_score, z_score):
         return mean_score + std_score * z_score
@@ -315,10 +316,10 @@ class ZSD:
         """Calculate and store scoring statistics for home and away teams."""
         # Calculate all statistics in one pass using numpy
         home_stats: np.ndarray = np.array(
-            [np.mean(self.home_pts), np.std(self.home_pts, ddof=1)]
+            [np.mean(self.home_goals), np.std(self.home_goals, ddof=1)]
         )
         away_stats: np.ndarray = np.array(
-            [np.mean(self.away_pts), np.std(self.away_pts, ddof=1)]
+            [np.mean(self.away_goals), np.std(self.away_goals, ddof=1)]
         )
 
         # Unpack results
@@ -374,8 +375,8 @@ class ZSD:
                 - np.ndarray: Full parameter vector of length 2*n_teams + 2
                 - dict: Parameters with keys:
                     'teams': list of team names in order
-                    'offense': list of offensive ratings
-                    'defense': list of defensive ratings
+                    'home': list of home ratings
+                    'away': list of away ratings
                     'factors': tuple of (home_factor, away_factor)
                 - None: Use random initialization
 
@@ -409,21 +410,21 @@ class ZSD:
         team_indices = {team: i for i, team in enumerate(initial_params["teams"])}
         model_indices = {i: team_indices[team] for i, team in enumerate(self.teams)}
 
-        # Set offensive ratings
-        if "offense" in initial_params:
-            offense = initial_params["offense"]
-            if len(offense) != self.n_teams:
-                raise ValueError(f"Expected {self.n_teams} offensive ratings")
+        # Set home ratings
+        if "home" in initial_params:
+            home = initial_params["home"]
+            if len(home) != self.n_teams:
+                raise ValueError(f"Expected {self.n_teams} home ratings")
             for i in range(self.n_teams):
-                x0[i] = offense[model_indices[i]]
+                x0[i] = home[model_indices[i]]
 
-        # Set defensive ratings
-        if "defense" in initial_params:
-            defense = initial_params["defense"]
-            if len(defense) != self.n_teams:
-                raise ValueError(f"Expected {self.n_teams} defensive ratings")
+        # Set away ratings
+        if "away" in initial_params:
+            away = initial_params["away"]
+            if len(away) != self.n_teams:
+                raise ValueError(f"Expected {self.n_teams} away ratings")
             for i in range(self.n_teams):
-                x0[i + self.n_teams] = defense[model_indices[i]]
+                x0[i + self.n_teams] = away[model_indices[i]]
 
         # Set factors
         if "factors" in initial_params:
@@ -439,7 +440,7 @@ class ZSD:
         Get team ratings as a DataFrame.
 
         Returns:
-            pd.DataFrame: Team ratings with columns ['team', 'offense', 'defense']
+            pd.DataFrame: Team ratings with columns ['team', 'home', 'away']
 
         Raises:
             ValueError: If model hasn't been fitted yet
@@ -447,14 +448,14 @@ class ZSD:
         if not self.fitted:
             raise ValueError("Model has not been fitted yet.")
 
-        offense_ratings = self.params[: self.n_teams]
-        defense_ratings = self.params[self.n_teams : 2 * self.n_teams]
+        home_ratings = self.params[: self.n_teams]
+        away_ratings = self.params[self.n_teams : 2 * self.n_teams]
 
         return pd.DataFrame(
-            {"team": self.teams, "offense": offense_ratings, "defense": defense_ratings}
+            {"team": self.teams, "home": home_ratings, "away": away_ratings}
         ).set_index("team")
 
-    def get_team_rating(self, team: str) -> Dict[str, float]:
+    def get_team_rating(self, team: str, home: bool = True) -> float:
         """
         Get ratings for a specific team.
 
@@ -462,7 +463,7 @@ class ZSD:
             team: Name of the team
 
         Returns:
-            Dict with keys 'offense' and 'defense'
+            Dict with keys 'home' and 'away'
 
         Raises:
             ValueError: If team not found or model not fitted
@@ -474,31 +475,35 @@ class ZSD:
             raise ValueError(f"Unknown team: {team}")
 
         idx = self.team_map[team]
-        return {"offense": self.params[idx], "defense": self.params[idx + self.n_teams]}
+        home_rating = self.params[idx]
+        away_rating = self.params[idx]
+        if home:
+            return home_rating
+        else:
+            return away_rating
 
 
 if __name__ == "__main__":
-    # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
-    df["game_total"] = df["away_pts"] + df["home_pts"]
-    df["goal_difference"] = df["home_pts"] - df["away_pts"]
-    df["result"] = np.where(df["goal_difference"] > 0, 1, -1)
+    loader = MatchDataLoader(sport="handball")
+    df = loader.load_matches(
+        league="Herre Handbold Ligaen",
+        seasons=["2024/2025"],
+    )
+    team_weights = dixon_coles_weights(df.datetime)
 
-    df["date"] = pd.to_datetime(df["date"], format="%b %d (%a %I:%M%p)")
-    team_weights = dixon_coles_weights(df.date, xi=0.08)
-    np.random.seed(0)
-    spread_weights = np.random.uniform(0.1, 1.0, len(df))
+    home_team = "GOG"
+    away_team = "Mors"
 
-    home_team = "St Kilda"
-    away_team = "North Melbourne"
-
-    # Use no weights
-    model = ZSD(df)
+    model = ZSD(df, ratings_weights=team_weights)
     model.fit()
     prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
+        home_team, away_team, point_spread=2, include_draw=True
     )
+    print(f"Home win probability: {prob_home}")
+    print(f"Draw probability: {prob_draw}")
+    print(f"Away win probability: {prob_away}")
+    print(f"Home rating: {model.get_team_rating(home_team)}")
+    print(f"Away rating: {model.get_team_rating(away_team)}")
 
 
 # %%

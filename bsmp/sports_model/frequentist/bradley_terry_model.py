@@ -7,6 +7,7 @@ import pandas as pd
 import scipy.stats as stats
 from scipy.optimize import minimize
 
+from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.utils import dixon_coles_weights
 
 
@@ -34,6 +35,8 @@ class BradleyTerry:
         spread_coefficient (float): Point spread model coefficient
         spread_error (float): Standard error of spread predictions
     """
+
+    NAME = "BT"
 
     def __init__(
         self,
@@ -229,6 +232,8 @@ class BradleyTerry:
         if not self.fitted:
             raise ValueError("Model has not been fitted yet.")
 
+        print(f"Home advantage: {self.params[-1]}")
+
         return pd.DataFrame({"team": self.teams, "rating": self.params[:-1]}).set_index(
             "team"
         )
@@ -245,24 +250,25 @@ class BradleyTerry:
 
 
 if __name__ == "__main__":
-    # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
-    df["game_total"] = df["away_pts"] + df["home_pts"]
-    df["goal_difference"] = df["home_pts"] - df["away_pts"]
-    df["result"] = np.where(df["goal_difference"] > 0, 1, -1)
+    loader = MatchDataLoader(sport="handball")
+    df = loader.load_matches(
+        league="Herre Handbold Ligaen",
+        seasons=["2024/2025"],
+    )
+    team_weights = dixon_coles_weights(df.datetime)
 
-    df["date"] = pd.to_datetime(df["date"], format="%b %d (%a %I:%M%p)")
-    team_weights = dixon_coles_weights(df.date)
-    np.random.seed(0)
-    spread_weights = np.random.uniform(0.1, 1.0, len(df))
+    home_team = "GOG"
+    away_team = "Mors"
 
-    home_team = "Richmond"
-    away_team = "GWS Giants"
-
-    # Use no weights
-    model = BradleyTerry(df)
+    model = BradleyTerry(df, ratings_weights=team_weights)
     model.fit()
     prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=15, include_draw=False
+        home_team, away_team, point_spread=2, include_draw=True
     )
+    print(f"Home win probability: {prob_home}")
+    print(f"Draw probability: {prob_draw}")
+    print(f"Away win probability: {prob_away}")
+    print(f"Home rating: {model.get_team_rating(home_team)}")
+    print(f"Away rating: {model.get_team_rating(away_team)}")
+
+# %%

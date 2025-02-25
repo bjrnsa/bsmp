@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.frequentist.bradley_terry_model import BradleyTerry
 from bsmp.sports_model.utils import dixon_coles_weights
 
@@ -25,6 +26,8 @@ class TOOR(BradleyTerry):
         away_team_coef (float): Away team rating coefficient
     """
 
+    NAME = "TOOR"
+
     def __init__(
         self,
         df: pd.DataFrame,
@@ -33,7 +36,7 @@ class TOOR(BradleyTerry):
         home_advantage: float = 0.1,
     ):
         """Initialize TOOR model."""
-        super().__init__(df, ratings_weights, match_weights, home_advantage)
+        super().__init__(df, ratings_weights, match_weights)
         self.team_coefficients = None
         self.home_coefficient = None
         self.home_team_coef = None
@@ -170,24 +173,25 @@ class TOOR(BradleyTerry):
 
 
 if __name__ == "__main__":
-    # Load AFL data for testing
-    df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").loc[:176]
-    df.columns = df.columns.str.lower().str.replace(" ", "_")
-    df["game_total"] = df["away_pts"] + df["home_pts"]
-    df["goal_difference"] = df["home_pts"] - df["away_pts"]
-    df["result"] = np.where(df["goal_difference"] > 0, 1, -1)
+    loader = MatchDataLoader(sport="handball")
+    df = loader.load_matches(
+        league="Herre Handbold Ligaen",
+        seasons=["2024/2025"],
+    )
+    team_weights = dixon_coles_weights(df.datetime)
 
-    df["date"] = pd.to_datetime(df["date"], format="%b %d (%a %I:%M%p)")
-    team_weights = dixon_coles_weights(df.date)
-    np.random.seed(0)
-    spread_weights = np.random.uniform(0.1, 1.0, len(df))
+    home_team = "GOG"
+    away_team = "Mors"
 
-    home_team = "St Kilda"
-    away_team = "North Melbourne"
-
-    # Test with different weight configurations
-    model = TOOR(df)
+    model = TOOR(df, ratings_weights=team_weights)
     model.fit()
     prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=0, include_draw=False
+        home_team, away_team, point_spread=2, include_draw=True
     )
+    print(f"Home win probability: {prob_home}")
+    print(f"Draw probability: {prob_draw}")
+    print(f"Away win probability: {prob_away}")
+    print(f"Home rating: {model.get_team_rating(home_team)}")
+    print(f"Away rating: {model.get_team_rating(away_team)}")
+
+# %%
