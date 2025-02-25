@@ -1,11 +1,12 @@
 # %%
 
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import scipy.stats as stats
 from scipy.optimize import minimize
+from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.utils import dixon_coles_weights
@@ -13,131 +14,276 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 class BradleyTerry:
     """
-    Bradley-Terry model for predicting match outcomes.
+    Bradley-Terry model for predicting match outcomes with scikit-learn-like API.
 
     A probabilistic model that estimates team ratings and predicts match outcomes
     using maximum likelihood estimation. The model combines logistic regression for
     win probabilities with OLS regression for point spread predictions.
 
-    Attributes:
-        teams (np.ndarray): Unique team identifiers
-        n_teams (int): Number of teams in the dataset
-        team_map (Dict[str, int]): Mapping of team names to indices
-        home_idx (np.ndarray): Indices of home teams
-        away_idx (np.ndarray): Indices of away teams
-        ratings_weights (np.ndarray): Weights for rating optimization
-        match_weights (np.ndarray): Weights for spread prediction
-        fitted (bool): Whether the model has been fitted
-        params (np.ndarray): Optimized model parameters after fitting
-            [0:n_teams] - Team ratings
-            [-1] - Home advantage parameter
-        intercept (float): Point spread model intercept
-        spread_coefficient (float): Point spread model coefficient
-        spread_error (float): Standard error of spread predictions
+    Parameters
+    ----------
+    home_advantage : float, default=0.1
+        Initial value for home advantage parameter.
+
+    Attributes
+    ----------
+    teams_ : np.ndarray
+        Unique team identifiers
+    n_teams_ : int
+        Number of teams in the dataset
+    team_map_ : Dict[str, int]
+        Mapping of team names to indices
+    params_ : np.ndarray
+        Optimized model parameters after fitting
+        [0:n_teams_] - Team ratings
+        [-1] - Home advantage parameter
+    intercept_ : float
+        Point spread model intercept
+    spread_coefficient_ : float
+        Point spread model coefficient
+    spread_error_ : float
+        Standard error of spread predictions
     """
 
     NAME = "BT"
 
-    def __init__(
+    def __init__(self, home_advantage: float = 0.1) -> None:
+        """Initialize Bradley-Terry model."""
+        self.home_advantage = home_advantage
+        self.is_fitted_ = False
+
+    def fit(
         self,
-        df: pd.DataFrame,
+        X: pd.DataFrame,
+        y: Optional[Union[np.ndarray, pd.Series]] = None,
+        Z: Optional[pd.DataFrame] = None,
         ratings_weights: Optional[np.ndarray] = None,
         match_weights: Optional[np.ndarray] = None,
-        home_advantage: float = 0.1,
-    ) -> None:
-        """Initialize Bradley-Terry model."""
-        # Extract numpy arrays once
-        data = {
-            col: df[col].to_numpy()
-            for col in ["home_team", "away_team", "goal_difference", "result"]
-        }
-        self.__dict__.update(data)
+    ) -> "BradleyTerry":
+        """
+        Fit the Bradley-Terry model.
 
-        # Team setup
-        self.teams = np.unique(self.home_team)
-        self.n_teams = len(self.teams)
-        self.team_map = {team: idx for idx, team in enumerate(self.teams)}
+        Parameters
+        ----------
+        X : pd.DataFrame
+            DataFrame containing match data with two columns:
+            - First column: Home team names (string)
+            - Second column: Away team names (string)
+            If y is None, X must have a third column with goal differences.
+        y : Optional[Union[np.ndarray, pd.Series]], default=None
+            Goal differences (home - away). If provided, this will be used instead of
+            the third column in X.
+        Z : Optional[pd.DataFrame], default=None
+            Additional data for the model, such as home_goals and away_goals.
+            No column name checking is performed, only dimension validation.
+        ratings_weights : Optional[np.ndarray], default=None
+            Weights for rating optimization
+        match_weights : Optional[np.ndarray], default=None
+            Weights for spread prediction
 
-        # Create team indices
-        self.home_idx = np.array([self.team_map[team] for team in self.home_team])
-        self.away_idx = np.array([self.team_map[team] for team in self.away_team])
-
-        # Set weights
-        n_matches = len(df)
-        self.ratings_weights = (
-            np.ones(n_matches) if ratings_weights is None else ratings_weights
-        )
-        self.match_weights = (
-            np.ones(n_matches) if match_weights is None else match_weights
-        )
-
-        # Initialize parameters
-        self.params = np.zeros(self.n_teams + 1)
-        self.params[-1] = home_advantage
-        self.fitted = False
-
-    def fit(self) -> None:
-        """Fit the Bradley-Terry model."""
+        Returns
+        -------
+        self : BradleyTerry
+            Fitted model
+        """
         try:
+            # Validate input dimensions and types
+            self._validate_X(X)
+
+            # Validate Z dimensions if provided
+            if Z is not None and len(Z) != len(X):
+                raise ValueError("Z must have the same number of rows as X")
+
+            # Extract team data (first two columns)
+            self.home_team_ = X.iloc[:, 0].to_numpy()
+            self.away_team_ = X.iloc[:, 1].to_numpy()
+
+            # Handle goal difference (y)
+            if y is not None:
+                self.goal_difference_ = np.asarray(y)
+            elif X.shape[1] >= 3:
+                self.goal_difference_ = X.iloc[:, 2].to_numpy()
+            else:
+                raise ValueError(
+                    "Either y or a third column in X with goal differences must be provided"
+                )
+
+            # Validate goal difference
+            if not np.issubdtype(self.goal_difference_.dtype, np.number):
+                raise ValueError("Goal differences must be numeric")
+
+            # Derive result from goal_difference
+            self.result_ = np.zeros_like(self.goal_difference_, dtype=int)
+            self.result_[self.goal_difference_ > 0] = 1
+            self.result_[self.goal_difference_ < 0] = -1
+            # result = 0 when goal_difference = 0 (draw)
+
+            # Team setup
+            self.teams_ = np.unique(np.concatenate([self.home_team_, self.away_team_]))
+            self.n_teams_ = len(self.teams_)
+            self.team_map_ = {team: idx for idx, team in enumerate(self.teams_)}
+
+            # Create team indices
+            self.home_idx_ = np.array(
+                [self.team_map_[team] for team in self.home_team_]
+            )
+            self.away_idx_ = np.array(
+                [self.team_map_[team] for team in self.away_team_]
+            )
+
+            # Set weights
+            n_matches = len(X)
+            self.ratings_weights_ = (
+                np.ones(n_matches) if ratings_weights is None else ratings_weights
+            )
+            self.match_weights_ = (
+                np.ones(n_matches) if match_weights is None else match_weights
+            )
+
+            # Initialize parameters
+            self.params_ = np.zeros(self.n_teams_ + 1)
+            self.params_[-1] = self.home_advantage
+
             # Optimize parameters
-            self.params = self._optimize_parameters()
+            self.params_ = self._optimize_parameters()
 
             # Fit point spread model
             rating_diff = self._get_rating_difference()
-            (self.intercept, self.spread_coefficient), self.spread_error = (
-                self._fit_ols(self.goal_difference, rating_diff)
+            (self.intercept_, self.spread_coefficient_), self.spread_error_ = (
+                self._fit_ols(self.goal_difference_, rating_diff)
             )
 
-            self.fitted = True
+            self.is_fitted_ = True
             return self
 
         except Exception as e:
-            self.fitted = False
+            self.is_fitted_ = False
             raise ValueError(f"Model fitting failed: {str(e)}") from e
 
     def predict(
         self,
-        home_team: str,
-        away_team: str,
+        X: pd.DataFrame,
+        Z: Optional[pd.DataFrame] = None,
+        point_spread: float = 0.0,
+    ) -> np.ndarray:
+        """
+        Predict point spreads for matches.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            DataFrame containing match data with two columns:
+            - First column: Home team names (string)
+            - Second column: Away team names (string)
+        Z : Optional[pd.DataFrame], default=None
+            Additional data for prediction. No column name checking is performed,
+            only dimension validation.
+        point_spread : float, default=0.0
+            Point spread adjustment
+
+        Returns
+        -------
+        np.ndarray
+            Predicted point spreads (goal differences)
+        """
+        self._check_is_fitted()
+        self._validate_X(X, fit=False)
+
+        # Validate Z dimensions if provided
+        if Z is not None and len(Z) != len(X):
+            raise ValueError("Z must have the same number of rows as X")
+
+        home_teams = X.iloc[:, 0].to_numpy()
+        away_teams = X.iloc[:, 1].to_numpy()
+
+        predicted_spreads = np.zeros(len(X))
+
+        for i, (home_team, away_team) in enumerate(zip(home_teams, away_teams)):
+            # Validate teams
+            self._validate_teams([home_team, away_team])
+
+            # Calculate rating difference
+            rating_diff = self._get_rating_difference(
+                home_idx=self.team_map_[home_team],
+                away_idx=self.team_map_[away_team],
+            )
+
+            # Calculate predicted spread
+            predicted_spreads[i] = (
+                self.intercept_ + self.spread_coefficient_ * rating_diff
+            )
+
+        return predicted_spreads
+
+    def predict_proba(
+        self,
+        X: pd.DataFrame,
+        Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
-        return_spread: bool = False,
-    ) -> Union[Tuple[float, float, float], float]:
+    ) -> np.ndarray:
         """
-        Predict match outcome probabilities or spread.
+        Predict match outcome probabilities.
 
-        Args:
-            home_team: Name of home team
-            away_team: Name of away team
-            point_spread: Point spread adjustment
-            include_draw: Whether to include draw probability
+        Parameters
+        ----------
+        X : pd.DataFrame
+            DataFrame containing match data with two columns:
+            - First column: Home team names (string)
+            - Second column: Away team names (string)
+        Z : Optional[pd.DataFrame], default=None
+            Additional data for prediction. No column name checking is performed,
+            only dimension validation.
+        point_spread : float, default=0.0
+            Point spread adjustment
+        include_draw : bool, default=True
+            Whether to include draw probability
 
-        Returns:
-            tuple: (home_win_prob, draw_prob, away_win_prob)
+        Returns
+        -------
+        np.ndarray
+            Array of shape (n_samples, n_classes) with probabilities
+            If include_draw=True: [home_win, draw, away_win]
+            If include_draw=False: [home_win, away_win]
         """
-        if not self.fitted:
-            raise ValueError("Model has not been fitted yet.")
+        self._check_is_fitted()
+        self._validate_X(X, fit=False)
 
-        # Validate teams
-        for team in (home_team, away_team):
-            if team not in self.team_map:
-                raise ValueError(f"Unknown team: {team}")
+        # Validate Z dimensions if provided
+        if Z is not None and len(Z) != len(X):
+            raise ValueError("Z must have the same number of rows as X")
 
-        # Calculate rating difference
-        rating_diff = self._get_rating_difference(
-            home_idx=self.team_map[home_team],
-            away_idx=self.team_map[away_team],
-        )
+        home_teams = X.iloc[:, 0].to_numpy()
+        away_teams = X.iloc[:, 1].to_numpy()
 
-        # Calculate predicted spread
-        predicted_spread = self.intercept + self.spread_coefficient * rating_diff
+        n_classes = 3 if include_draw else 2
+        probabilities = np.zeros((len(X), n_classes))
 
-        if return_spread:
-            return predicted_spread
+        for i, (home_team, away_team) in enumerate(zip(home_teams, away_teams)):
+            # Validate teams
+            self._validate_teams([home_team, away_team])
 
-        return self._calculate_probabilities(
-            predicted_spread, self.spread_error, point_spread, include_draw
-        )
+            # Calculate rating difference
+            rating_diff = self._get_rating_difference(
+                home_idx=self.team_map_[home_team],
+                away_idx=self.team_map_[away_team],
+            )
+
+            # Calculate predicted spread
+            predicted_spread = self.intercept_ + self.spread_coefficient_ * rating_diff
+
+            # Calculate probabilities
+            if include_draw:
+                thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
+                probs = stats.norm.cdf(thresholds, predicted_spread, self.spread_error_)
+                probabilities[i] = [1 - probs[0], probs[0] - probs[1], probs[1]]
+            else:
+                prob_home = 1 - stats.norm.cdf(
+                    point_spread, predicted_spread, self.spread_error_
+                )
+                probabilities[i] = [prob_home, 1 - prob_home]
+
+        return probabilities
 
     def _log_likelihood(self, params: np.ndarray) -> float:
         """Calculate negative log likelihood for parameter optimization."""
@@ -146,23 +292,23 @@ class BradleyTerry:
         log_likelihood = 0.0
 
         # Precompute home and away ratings
-        home_ratings = ratings[self.home_idx]
-        away_ratings = ratings[self.away_idx]
+        home_ratings = ratings[self.home_idx_]
+        away_ratings = ratings[self.away_idx_]
         win_probs = self._logit_transform(home_advantage + home_ratings - away_ratings)
 
         # Vectorized calculation
-        win_mask = self.result == 1
-        loss_mask = self.result == -1
+        win_mask = self.result_ == 1
+        loss_mask = self.result_ == -1
         draw_mask = ~(win_mask | loss_mask)
 
         log_likelihood += np.sum(
-            self.ratings_weights[win_mask] * np.log(win_probs[win_mask])
+            self.ratings_weights_[win_mask] * np.log(win_probs[win_mask])
         )
         log_likelihood += np.sum(
-            self.ratings_weights[loss_mask] * np.log(1 - win_probs[loss_mask])
+            self.ratings_weights_[loss_mask] * np.log(1 - win_probs[loss_mask])
         )
         log_likelihood += np.sum(
-            self.ratings_weights[draw_mask]
+            self.ratings_weights_[draw_mask]
             * (np.log(win_probs[draw_mask]) + np.log(1 - win_probs[draw_mask]))
         )
 
@@ -171,8 +317,8 @@ class BradleyTerry:
     def _optimize_parameters(self) -> np.ndarray:
         """Optimize model parameters using SLSQP."""
         result = minimize(
-            fun=lambda p: self._log_likelihood(p) / len(self.result),
-            x0=self.params,
+            fun=lambda p: self._log_likelihood(p) / len(self.result_),
+            x0=self.params_,
             method="SLSQP",
             options={"ftol": 1e-10, "maxiter": 200},
         )
@@ -185,10 +331,10 @@ class BradleyTerry:
     ) -> np.ndarray:
         """Calculate rating difference between teams."""
         if home_idx is None:
-            home_idx, away_idx = self.home_idx, self.away_idx
+            home_idx, away_idx = self.home_idx_, self.away_idx_
 
-        ratings = self.params[:-1]
-        home_advantage = self.params[-1]
+        ratings = self.params_[:-1]
+        home_advantage = self.params_[-1]
         return self._logit_transform(
             home_advantage + ratings[home_idx] - ratings[away_idx]
         )
@@ -200,7 +346,7 @@ class BradleyTerry:
     def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
         """Fit weighted OLS regression using match weights."""
         X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights)
+        W = np.diag(self.match_weights_)
 
         # Use more efficient matrix operations
         XtW = X.T @ W
@@ -211,64 +357,123 @@ class BradleyTerry:
 
         return coefficients, std_error
 
-    def _calculate_probabilities(
-        self,
-        predicted_spread: float,
-        std_error: float,
-        point_spread: float = 0.0,
-        include_draw: bool = True,
-    ) -> Tuple[float, float, float]:
-        """Calculate win/draw/loss probabilities using normal distribution."""
-        if include_draw:
-            thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
-            probs = stats.norm.cdf(thresholds, predicted_spread, std_error)
-            return 1 - probs[0], probs[0] - probs[1], probs[1]
-        else:
-            prob_home = 1 - stats.norm.cdf(point_spread, predicted_spread, std_error)
-            return prob_home, np.nan, 1 - prob_home
+    def _validate_X(self, X: pd.DataFrame, fit: bool = True) -> None:
+        """
+        Validate input DataFrame dimensions and types.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            Input data
+        fit : bool, default=True
+            Whether this is being called during fit (requires at least 2 columns)
+            or during predict (requires exactly 2 columns)
+        """
+        # Check if X is a DataFrame
+        if not isinstance(X, pd.DataFrame):
+            raise ValueError("X must be a pandas DataFrame")
+
+        # Check minimum number of columns
+        min_cols = 2
+        if X.shape[1] < min_cols:
+            raise ValueError(f"X must have at least {min_cols} columns")
+
+        # For predict methods, exactly 2 columns are required
+        if not fit and X.shape[1] != 2:
+            raise ValueError("X must have exactly 2 columns for prediction")
+
+        # Check that first two columns contain strings (team names)
+        for i in range(2):
+            if not pd.api.types.is_string_dtype(X.iloc[:, i]):
+                raise ValueError(f"Column {i} must contain string values (team names)")
+
+    def _validate_teams(self, teams: List[str]) -> None:
+        """Validate teams exist in the model."""
+        for team in teams:
+            if team not in self.team_map_:
+                raise ValueError(f"Unknown team: {team}")
+
+    def _check_is_fitted(self) -> None:
+        """Check if the model is fitted."""
+        if not self.is_fitted_:
+            raise ValueError("Model has not been fitted yet.")
 
     def get_team_ratings(self) -> pd.DataFrame:
-        """Get team ratings as a DataFrame."""
-        if not self.fitted:
-            raise ValueError("Model has not been fitted yet.")
+        """
+        Get team ratings as a DataFrame.
 
-        print(f"Home advantage: {self.params[-1]}")
-
-        return pd.DataFrame({"team": self.teams, "rating": self.params[:-1]}).set_index(
-            "team"
-        )
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with team ratings
+        """
+        self._check_is_fitted()
+        print(f"Home advantage: {self.params_[-1]}")
+        return pd.DataFrame(
+            {"team": self.teams_, "rating": self.params_[:-1]}
+        ).set_index("team")
 
     def get_team_rating(self, team: str) -> float:
-        """Get rating for a specific team."""
-        if not self.fitted:
-            raise ValueError("Model has not been fitted yet.")
+        """
+        Get rating for a specific team.
 
-        if team not in self.team_map:
-            raise ValueError(f"Unknown team: {team}")
+        Parameters
+        ----------
+        team : str
+            Team name
 
-        return self.params[self.team_map[team]]
+        Returns
+        -------
+        float
+            Team rating
+        """
+        self._check_is_fitted()
+        self._validate_teams([team])
+        return self.params_[self.team_map_[team]]
 
 
+# %%
 if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
         seasons=["2024/2025"],
     )
-    team_weights = dixon_coles_weights(df.datetime)
-
-    home_team = "GOG"
-    away_team = "Mors"
-
-    model = BradleyTerry(df, ratings_weights=team_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=2, include_draw=True
+    train_df, test_df = train_test_split(
+        df, test_size=0.2, random_state=42, shuffle=False
     )
-    print(f"Home win probability: {prob_home}")
-    print(f"Draw probability: {prob_draw}")
-    print(f"Away win probability: {prob_away}")
-    print(f"Home rating: {model.get_team_rating(home_team)}")
-    print(f"Away rating: {model.get_team_rating(away_team)}")
+    team_weights = dixon_coles_weights(train_df.datetime)
+
+    # train_df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").iloc[:176]
+    # train_df = train_df.assign(goal_difference=train_df["Home Pts"] - train_df["Away Pts"])
+    # train_df = train_df.assign(home_team=train_df["Home Team"], away_team=train_df["Away Team"])
+    # home_team = "St Kilda"
+    # away_team = "North Melbourne"
+
+    home_team = "Kolding"
+    away_team = "Sonderjyske"
+
+    # Create and fit the model
+    model = BradleyTerry()
+
+    X_train = train_df[["home_team", "away_team"]]
+    y_train = train_df["goal_difference"]
+    model.fit(X_train, y_train)
+    model.get_team_ratings()
+
+    X_test = test_df[["home_team", "away_team"]]
+    y_test = test_df["goal_difference"]
+
+    # Predict point spreads (goal differences)
+    predicted_spread = model.predict(X_test)
+
+    # Predict probabilities
+    probs = model.predict_proba(X_test, point_spread=0, include_draw=True)
+
+    print(f"Home win probability: {probs[0, 0]:.4f}")
+    print(f"Draw probability: {probs[0, 1]:.4f}")
+    print(f"Away win probability: {probs[0, 2]:.4f}")
+    print(f"Home rating: {model.get_team_rating(home_team):.4f}")
+    print(f"Away rating: {model.get_team_rating(away_team):.4f}")
 
 # %%

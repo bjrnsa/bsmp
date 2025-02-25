@@ -4,6 +4,7 @@ from typing import Dict, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.frequentist.zsd_model import ZSD
@@ -12,27 +13,46 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 class PRP(ZSD):
     """
-    Points Rating Prediction (PRP) model for predicting sports match outcomes.
+    Points Rating Prediction (PRP) model for predicting sports match outcomes with scikit-learn-like API.
 
-    This model estimates offensive and defensive ratings for each team, plus
-    adjustment factors. Parameter structure:
-    - Offensive ratings for each team
-    - Defensive ratings for each team
-    - Home/away adjustment factors
-
-    Score prediction uses a simple additive model:
+    This model extends the ZSD model and estimates offensive and defensive ratings for each team,
+    plus adjustment factors. The model uses a simple additive approach for score prediction:
     score = adj_factor + offense - defense + avg_score
+
+    Parameters
+    ----------
+    None
+
+    Attributes
+    ----------
+    teams_ : np.ndarray
+        Unique team identifiers
+    n_teams_ : int
+        Number of teams in the dataset
+    team_map_ : Dict[str, int]
+        Mapping of team names to indices
+    home_idx_ : np.ndarray
+        Indices of home teams
+    away_idx_ : np.ndarray
+        Indices of away teams
+    ratings_weights_ : np.ndarray
+        Weights for rating optimization
+    match_weights_ : np.ndarray
+        Weights for spread prediction
+    is_fitted_ : bool
+        Whether the model has been fitted
+    params_ : np.ndarray
+        Optimized model parameters after fitting
+        [0:n_teams_] - Offensive ratings
+        [n_teams_:2*n_teams_] - Defensive ratings
+        [-2:] - Home/away adjustment factors
     """
 
     NAME = "PRP"
 
-    def __init__(
-        self,
-        df,
-        ratings_weights: Union[np.ndarray, None] = None,
-        match_weights: Union[np.ndarray, None] = None,
-    ):
-        super().__init__(df, ratings_weights, match_weights)
+    def __init__(self) -> None:
+        """Initialize PRP model."""
+        super().__init__()
 
     def _predict_scores(
         self,
@@ -45,18 +65,26 @@ class PRP(ZSD):
         """
         Calculate predicted scores using offensive/defensive ratings.
 
-        Args:
-            home_idx: Index(es) of home team(s)
-            away_idx: Index(es) of away team(s)
-            offense_ratings: Optional offensive ratings to use
-            defense_ratings: Optional defensive ratings to use
-            factors: Optional (home_factor, away_factor) tuple
+        Parameters
+        ----------
+        home_idx : Union[int, np.ndarray, None], default=None
+            Index(es) of home team(s)
+        away_idx : Union[int, np.ndarray, None], default=None
+            Index(es) of away team(s)
+        offense_ratings : Union[np.ndarray, None], default=None
+            Optional offensive ratings to use
+        defense_ratings : Union[np.ndarray, None], default=None
+            Optional defensive ratings to use
+        factors : Union[Tuple[float, float], None], default=None
+            Optional (home_factor, away_factor) tuple
 
-        Returns:
+        Returns
+        -------
+        Dict[str, np.ndarray]
             Dict with 'home' and 'away' predicted scores
         """
         if factors is None:
-            factors = self.params[-2:]
+            factors = self.params_[-2:]
 
         ratings = self._get_team_ratings(
             home_idx, away_idx, offense_ratings, defense_ratings
@@ -86,13 +114,31 @@ class PRP(ZSD):
         offense_ratings: Union[np.ndarray, None] = None,
         defense_ratings: Union[np.ndarray, None] = None,
     ) -> Dict[str, np.ndarray]:
-        """Extract offensive/defensive ratings from parameters."""
+        """
+        Extract offensive/defensive ratings from parameters.
+
+        Parameters
+        ----------
+        home_idx : Union[int, np.ndarray, None]
+            Index(es) of home team(s)
+        away_idx : Union[int, np.ndarray, None]
+            Index(es) of away team(s)
+        offense_ratings : Union[np.ndarray, None], default=None
+            Optional offensive ratings to use
+        defense_ratings : Union[np.ndarray, None], default=None
+            Optional defensive ratings to use
+
+        Returns
+        -------
+        Dict[str, np.ndarray]
+            Dictionary with team ratings
+        """
         if offense_ratings is None:
             offense_ratings, defense_ratings = np.split(
-                self.params[: 2 * self.n_teams], 2
+                self.params_[: 2 * self.n_teams_], 2
             )
         if home_idx is None:
-            home_idx, away_idx = self.home_idx, self.away_idx
+            home_idx, away_idx = self.home_idx_, self.away_idx_
 
         return {
             "home_offense": offense_ratings[home_idx],
@@ -112,14 +158,22 @@ class PRP(ZSD):
         """
         Calculate score prediction.
 
-        Args:
-            home_advantage: Home advantage factor
-            offense_ratings: Team's offensive ratings
-            defense_ratings: Opponent's defensive ratings
-            avg_score: Average score factor
-            factor: Home/away adjustment multiplier
+        Parameters
+        ----------
+        home_advantage : float
+            Home advantage factor
+        offense_ratings : np.ndarray
+            Team's offensive ratings
+        defense_ratings : np.ndarray
+            Opponent's defensive ratings
+        avg_score : float
+            Average score factor
+        factor : float, default=0.5
+            Home/away adjustment multiplier
 
-        Returns:
+        Returns
+        -------
+        np.ndarray
             Predicted score
         """
         return (
@@ -130,63 +184,90 @@ class PRP(ZSD):
         """
         Get team ratings as a DataFrame.
 
-        Returns:
-            pd.DataFrame: Team ratings with columns ['team', 'offense', 'defense']
-
-        Raises:
-            ValueError: If model hasn't been fitted yet
+        Returns
+        -------
+        pd.DataFrame
+            Team ratings with columns ['team', 'offense', 'defense']
         """
-        if not self.fitted:
-            raise ValueError("Model has not been fitted yet.")
+        self._check_is_fitted()
 
-        offense_ratings = self.params[: self.n_teams]
-        defense_ratings = self.params[self.n_teams : 2 * self.n_teams]
+        offense_ratings = self.params_[: self.n_teams_]
+        defense_ratings = self.params_[self.n_teams_ : 2 * self.n_teams_]
 
         return pd.DataFrame(
-            {"team": self.teams, "offense": offense_ratings, "defense": defense_ratings}
+            {
+                "team": self.teams_,
+                "offense": offense_ratings,
+                "defense": defense_ratings,
+            }
         ).set_index("team")
 
-    def get_team_rating(self, team: str) -> float:
+    def get_team_rating(self, team: str) -> Dict[str, float]:
         """
         Get ratings for a specific team.
 
-        Args:
-            team: Name of the team
+        Parameters
+        ----------
+        team : str
+            Name of the team
 
-        Returns:
+        Returns
+        -------
+        Dict[str, float]
             Dict with keys 'offense' and 'defense'
-
-        Raises:
-            ValueError: If team not found or model not fitted
         """
-        if not self.fitted:
-            raise ValueError("Model has not been fitted yet.")
+        self._check_is_fitted()
+        self._validate_teams([team])
 
-        if team not in self.team_map:
-            raise ValueError(f"Unknown team: {team}")
+        idx = self.team_map_[team]
+        return {
+            "offense": self.params_[idx],
+            "defense": self.params_[idx + self.n_teams_],
+        }
 
-        idx = self.team_map[team]
-        return {"offense": self.params[idx], "defense": self.params[idx + self.n_teams]}
 
-
+# %%
 if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
         seasons=["2024/2025"],
     )
-    team_weights = dixon_coles_weights(df.datetime)
+    train_df, test_df = train_test_split(
+        df, test_size=0.2, random_state=42, shuffle=False
+    )
+    team_weights = dixon_coles_weights(train_df.datetime)
 
     home_team = "GOG"
     away_team = "Mors"
 
-    model = PRP(df, ratings_weights=team_weights)
-    model.fit()
-    prob_home, prob_draw, prob_away = model.predict(
-        home_team, away_team, point_spread=2, include_draw=True
-    )
-    print(f"Home win probability: {prob_home}")
-    print(f"Draw probability: {prob_draw}")
-    print(f"Away win probability: {prob_away}")
-    print(f"Home ratings: {model.get_team_rating(home_team)}")
-    print(f"Away ratings: {model.get_team_rating(away_team)}")
+    # Create and fit the model
+    model = PRP()
+
+    # Prepare training data
+    X_train = train_df[["home_team", "away_team"]]
+    y_train = train_df["goal_difference"]
+    Z_train = train_df[["home_goals", "away_goals"]]
+    model.fit(X_train, y_train, Z=Z_train, ratings_weights=team_weights)
+
+    # Display team ratings
+    print(model.get_team_ratings())
+
+    # Create a test DataFrame for prediction
+    X_test = test_df[["home_team", "away_team"]]
+
+    # Predict point spreads (goal differences)
+    predicted_spread = model.predict(X_test)
+    print(f"Predicted goal difference: {predicted_spread[0]:.2f}")
+
+    # Predict probabilities
+    probs = model.predict_proba(X_test, point_spread=0, include_draw=True)
+
+    print(f"Home win probability: {probs[0, 0]:.4f}")
+    print(f"Draw probability: {probs[0, 1]:.4f}")
+    print(f"Away win probability: {probs[0, 2]:.4f}")
+
+    home_ratings = model.get_team_rating(home_team)
+    away_ratings = model.get_team_rating(away_team)
+    print(f"Home ratings: {home_ratings}")
+    print(f"Away ratings: {away_ratings}")
