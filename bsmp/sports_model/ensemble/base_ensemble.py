@@ -6,6 +6,7 @@ import pandas as pd
 
 from bsmp.sports_model.frequentist.bradley_terry_model import BradleyTerry
 from bsmp.sports_model.frequentist.gssd_model import GSSD
+from bsmp.sports_model.frequentist.poisson import Poisson
 from bsmp.sports_model.frequentist.prp_model import PRP
 from bsmp.sports_model.frequentist.toor_model import TOOR
 from bsmp.sports_model.frequentist.zsd_model import ZSD
@@ -26,6 +27,7 @@ class BaseEnsemble(ABC):
         "prp": PRP,
         "toor": TOOR,
         "zsd": ZSD,
+        "poisson": Poisson,
     }
 
     def __init__(

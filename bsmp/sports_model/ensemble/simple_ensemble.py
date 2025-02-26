@@ -161,7 +161,9 @@ if __name__ == "__main__":
     away_team = "Sonderjyske"
 
     # Create and fit the model
-    model = SimpleEnsemble(model_names=["bradley_terry", "gssd", "prp", "toor", "zsd"])
+    model = SimpleEnsemble(
+        model_names=["bradley_terry", "gssd", "prp", "toor", "zsd", "poisson"]
+    )
 
     # Prepare training data
     X_train = train_df[["home_team", "away_team"]]
