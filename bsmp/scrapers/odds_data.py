@@ -13,7 +13,7 @@ class OddsDataScraper:
     """Scrapes and stores betting odds data from FlashScore matches."""
 
     BASE_URL = "https://www.flashscore.com/match"
-    NETWORK_DELAY = 3
+    NETWORK_DELAY = 1.5
     DEFAULT_BATCH_SIZE = 100
 
     def __init__(self, db_path: str = "database/database.db", max_retries: int = 3):
@@ -85,6 +85,10 @@ class OddsDataScraper:
                     self._parse_odd(el.text)
                     for el in bookmaker.find_all(class_="oddsValueInner")
                 ]
+                if not odds_values:
+                    continue
+                if len(odds_values) != 3:
+                    continue
                 results.append((name, *odds_values))
             except (AttributeError, ValueError):
                 continue
@@ -160,7 +164,7 @@ class OddsDataScraper:
         browser = BrowserManager(headless=headless)
         data_buffer = []
 
-        with tqdm(desc="Processing odds", unit="match") as progress:
+        with tqdm(desc="Processing odds", unit=" match") as progress:
             for match_id in self._fetch_pending_matches():
                 if records := self._process_match_odds(match_id, browser):
                     data_buffer.extend(records)
