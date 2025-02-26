@@ -37,6 +37,7 @@ class BaseModel(ABC):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
+        outcome: Optional[str] = None,
     ) -> np.ndarray:
         """
         Predict match outcome probabilities.

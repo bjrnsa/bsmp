@@ -6,6 +6,43 @@ import pandas as pd
 from numpy.typing import NDArray
 
 
+def rho_correction_vec(df: pd.DataFrame) -> NDArray:
+    dc_adj = np.select(
+        [
+            (df["goals_home"] == 0) & (df["goals_away"] == 0),
+            (df["goals_home"] == 0) & (df["goals_away"] == 1),
+            (df["goals_home"] == 1) & (df["goals_away"] == 0),
+            (df["goals_home"] == 1) & (df["goals_away"] == 1),
+        ],
+        [
+            1 - (df["home_exp"] * df["away_exp"] * df["rho"]),
+            1 + (df["home_exp"] * df["rho"]),
+            1 + (df["away_exp"] * df["rho"]),
+            1 - df["rho"],
+        ],
+        default=1,
+    )
+    return dc_adj
+
+
+def rho_correction(
+    goals_home: int, goals_away: int, home_exp: float, away_exp: float, rho: float
+) -> float:
+    """
+    Applies the dixon and coles correction
+    """
+    if goals_home == 0 and goals_away == 0:
+        return 1 - (home_exp * away_exp * rho)
+    elif goals_home == 0 and goals_away == 1:
+        return 1 + (home_exp * rho)
+    elif goals_home == 1 and goals_away == 0:
+        return 1 + (away_exp * rho)
+    elif goals_home == 1 and goals_away == 1:
+        return 1 - rho
+    else:
+        return 1.0
+
+
 def dixon_coles_weights(
     dates: Union[List[date], pd.Series], xi: float = 0.0018, base_date: date = None
 ) -> NDArray:
@@ -31,4 +68,5 @@ def dixon_coles_weights(
 
     diffs = np.array([(base_date - x).days for x in dates])
     weights = np.exp(-xi * diffs)
+    return weights
     return weights

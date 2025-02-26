@@ -171,6 +171,7 @@ class TOOR(BradleyTerry):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
+        outcome: Optional[str] = None,
     ) -> np.ndarray:
         """
         Predict match outcome probabilities using team-specific coefficients.
@@ -188,6 +189,8 @@ class TOOR(BradleyTerry):
             Point spread adjustment
         include_draw : bool, default=True
             Whether to include draw probability
+        outcome: Optional[str], default=None
+            Outcome to predict (home_win, draw, away_win)
 
         Returns
         -------
@@ -206,8 +209,11 @@ class TOOR(BradleyTerry):
         home_teams = X.iloc[:, 0].to_numpy()
         away_teams = X.iloc[:, 1].to_numpy()
 
-        n_classes = 3 if include_draw else 2
-        probabilities = np.zeros((len(X), n_classes))
+        if outcome is None:
+            n_classes = 3 if include_draw else 2
+            probabilities = np.zeros((len(X), n_classes))
+        else:
+            probabilities = np.zeros((len(X),))
 
         for i, (home_team, away_team) in enumerate(zip(home_teams, away_teams)):
             # Validate teams
@@ -228,13 +234,31 @@ class TOOR(BradleyTerry):
             if include_draw:
                 thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
                 probs = stats.norm.cdf(thresholds, predicted_spread, self.spread_error_)
-                probabilities[i] = [1 - probs[0], probs[0] - probs[1], probs[1]]
+                prob_home, prob_draw, prob_away = (
+                    1 - probs[0],
+                    probs[0] - probs[1],
+                    probs[1],
+                )
             else:
                 prob_home = 1 - stats.norm.cdf(
                     point_spread, predicted_spread, self.spread_error_
                 )
-                probabilities[i] = [prob_home, 1 - prob_home]
+                prob_home, prob_away = prob_home, 1 - prob_home
 
+            if outcome is not None:
+                if outcome == "home_win":
+                    probabilities[i] = prob_home
+                elif outcome == "away_win":
+                    probabilities[i] = prob_away
+                elif outcome == "draw":
+                    probabilities[i] = prob_draw
+            else:
+                if include_draw:
+                    probabilities[i] = [prob_home, prob_draw, prob_away]
+                else:
+                    probabilities[i] = [prob_home, prob_away]
+        if outcome:
+            return probabilities.reshape(-1)
         return probabilities
 
     def get_params(self) -> dict:

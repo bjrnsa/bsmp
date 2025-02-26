@@ -39,7 +39,7 @@ class NNLS(BaseEnsemble):
 
     def __init__(
         self,
-        model_names: List[str],
+        model_names: List[str] = list(SUPPORTED_MODELS.keys()),
     ):
         """
         Initialize ensemble model.
@@ -135,9 +135,6 @@ class NNLS(BaseEnsemble):
         # Stack predictions
         predictions = np.column_stack(predictions)
 
-        # Use NNLS ensemble if fitted, otherwise use simple average
-        if self.spread_ensemble_ is None:
-            return np.mean(predictions, axis=1)
         return self.spread_ensemble_.predict(predictions)
 
     def predict_proba(
@@ -146,6 +143,7 @@ class NNLS(BaseEnsemble):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
+        outcome: Optional[str] = None,
     ) -> np.ndarray:
         """
         Generate ensemble probability predictions using simple averaging.
@@ -155,7 +153,8 @@ class NNLS(BaseEnsemble):
             Z: Optional additional data (e.g., scores data)
             point_spread: Point spread adjustment
             include_draw: Whether to include draw probability
-
+            outcome: Optional[str], default=None
+                Outcome to predict (home_win, draw, away_win)
         Returns:
             Array of probabilities [home_win_prob, draw_prob, away_win_prob]
 
@@ -169,14 +168,18 @@ class NNLS(BaseEnsemble):
         all_probas = []
         for name, model in self.models.items():
             probas = model.predict_proba(
-                X, Z, point_spread=point_spread, include_draw=include_draw
+                X,
+                Z,
+                point_spread=point_spread,
+                include_draw=include_draw,
+                outcome=outcome,
             )
             all_probas.append(probas)
 
+        if outcome:
+            return np.mean(all_probas, axis=0).reshape(-1)
         # Stack probabilities from all models and take mean
-        stacked_probas = np.dstack(
-            all_probas
-        )  # Shape: (n_samples, n_outcomes, n_models)
+        stacked_probas = np.dstack(all_probas)
         return np.mean(stacked_probas, axis=2)
 
     def _fit_spread_ensemble(

@@ -30,7 +30,7 @@ class BaseEnsemble(ABC):
 
     def __init__(
         self,
-        model_names: List[str],
+        model_names: List[str] = list(SUPPORTED_MODELS.keys()),
     ):
         """
         Initialize ensemble model.
@@ -111,6 +111,7 @@ class BaseEnsemble(ABC):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
+        outcome: Optional[str] = None,
     ) -> np.ndarray:
         """
         Generate ensemble probability predictions.
@@ -120,6 +121,8 @@ class BaseEnsemble(ABC):
             Z: Optional additional data (e.g., scores data)
             point_spread: Point spread adjustment
             include_draw: Whether to include draw probability
+            outcome: Optional[str], default=None
+                Outcome to predict (home_win, draw, away_win)
 
         Returns:
             Array of probabilities [home_win_prob, draw_prob, away_win_prob]
