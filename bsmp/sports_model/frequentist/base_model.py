@@ -16,8 +16,7 @@ class BaseModel(ABC):
         X: pd.DataFrame,
         y: Optional[Union[np.ndarray, pd.Series]] = None,
         Z: Optional[pd.DataFrame] = None,
-        ratings_weights: Optional[np.ndarray] = None,
-        match_weights: Optional[np.ndarray] = None,
+        weights: Optional[np.ndarray] = None,
     ) -> "BaseModel":
         """
         Fit the model to the data.

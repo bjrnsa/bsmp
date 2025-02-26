@@ -50,13 +50,10 @@ class TOOR(BradleyTerry):
         X: pd.DataFrame,
         y: Optional[Union[np.ndarray, pd.Series]] = None,
         Z: Optional[pd.DataFrame] = None,
-        ratings_weights: Optional[np.ndarray] = None,
-        match_weights: Optional[np.ndarray] = None,
+        weights: Optional[np.ndarray] = None,
     ) -> "TOOR":
         """
-        Fit the TOOR model in two steps:
-        1. Calculate Bradley-Terry ratings
-        2. Fit team-specific regression for point spread prediction
+        Fit the TOOR model.
 
         Parameters
         ----------
@@ -71,10 +68,8 @@ class TOOR(BradleyTerry):
         Z : Optional[pd.DataFrame], default=None
             Additional data for the model, such as home_goals and away_goals.
             No column name checking is performed, only dimension validation.
-        ratings_weights : Optional[np.ndarray], default=None
+        weights : Optional[np.ndarray], default=None
             Weights for rating optimization
-        match_weights : Optional[np.ndarray], default=None
-            Weights for spread prediction
 
         Returns
         -------
@@ -83,7 +78,7 @@ class TOOR(BradleyTerry):
         """
         try:
             # First fit the Bradley-Terry model to get team ratings
-            super().fit(X, y, Z, ratings_weights, match_weights)
+            super().fit(X, y, Z, weights)
 
             # Optimize the three parameters using least squares
             initial_guess = np.array([0.1, 1.0, -1.0])
@@ -106,8 +101,8 @@ class TOOR(BradleyTerry):
                 + self.away_team_coef_ * self.params_[self.away_idx_]
             )
             residuals = self.goal_difference_ - predictions
-            weighted_sse = np.sum(self.match_weights_ * (residuals**2))
-            self.spread_error_ = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
+            sse = np.sum((residuals**2))
+            self.spread_error_ = np.sqrt(sse / (len(y) - X.shape[1]))
 
             return self
 
@@ -322,7 +317,7 @@ class TOOR(BradleyTerry):
 
         # Calculate weighted squared errors
         errors = self.goal_difference_ - predictions
-        sse = np.sum(self.match_weights_ * (errors**2))
+        sse = np.sum(errors**2 * self.weights_)
 
         return sse
 
@@ -332,12 +327,12 @@ if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        seasons=["2024/2025"],
+        # seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime)
+    weights = dixon_coles_weights(train_df.datetime, xi=0.0018)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -349,7 +344,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train)
+    model.fit(X_train, y_train, Z=Z_train, weights=weights)
 
     # Display team ratings
     print(model.get_team_ratings())
@@ -367,7 +362,3 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
-
-# %%
-
-# %%

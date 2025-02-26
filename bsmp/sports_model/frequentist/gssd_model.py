@@ -57,34 +57,32 @@ class GSSD(BaseModel):
         self,
         X: pd.DataFrame,
         y: Optional[Union[np.ndarray, pd.Series]] = None,
-        Z: pd.DataFrame = None,
-        ratings_weights: Optional[np.ndarray] = None,
-        match_weights: Optional[np.ndarray] = None,
+        Z: Optional[pd.DataFrame] = None,
+        weights: Optional[np.ndarray] = None,
     ) -> "GSSD":
         """
-        Fit the GSSD model to the data.
+        Fit the GSSD model.
 
         Parameters
         ----------
         X : pd.DataFrame
-            DataFrame containing match data with at least two columns:
+            DataFrame containing match data with two columns:
             - First column: Home team names (string)
             - Second column: Away team names (string)
             If y is None, X must have a third column with goal differences.
         y : Optional[Union[np.ndarray, pd.Series]], default=None
             Goal differences (home - away). If provided, this will be used instead of
             the third column in X.
-        Z : pd.DataFrame
-            Additional data for the model, containing at least 'home_goals' and 'away_goals' columns.
-        ratings_weights : Optional[np.ndarray], default=None
+        Z : Optional[pd.DataFrame], default=None
+            Additional data for the model, such as home_goals and away_goals.
+            No column name checking is performed, only dimension validation.
+        weights : Optional[np.ndarray], default=None
             Weights for rating optimization
-        match_weights : Optional[np.ndarray], default=None
-            Weights for spread prediction
 
         Returns
         -------
         self : GSSD
-            The fitted GSSD model instance.
+            Fitted model
         """
         try:
             # Validate input dimensions and types
@@ -135,12 +133,7 @@ class GSSD(BaseModel):
 
             # Set weights
             n_matches = len(X)
-            self.ratings_weights_ = (
-                np.ones(n_matches) if ratings_weights is None else ratings_weights
-            )
-            self.match_weights_ = (
-                np.ones(n_matches) if match_weights is None else match_weights
-            )
+            self.weights_ = np.ones(n_matches) if weights is None else weights
 
             # Calculate team statistics
             self._calculate_team_statistics(X)
@@ -165,8 +158,8 @@ class GSSD(BaseModel):
             # Calculate spread error
             predictions = self._get_predictions(features)
             residuals = self.goal_difference_ - predictions
-            weighted_sse = np.sum(self.match_weights_ * (residuals**2))
-            self.spread_error_ = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
+            sse = np.sum((residuals**2))
+            self.spread_error_ = np.sqrt(sse / (len(y) - X.shape[1]))
 
             self.is_fitted_ = True
             return self
@@ -359,7 +352,7 @@ class GSSD(BaseModel):
 
         # Calculate weighted squared errors
         errors = self.goal_difference_ - predictions
-        sse = np.sum(self.ratings_weights_ * (errors**2))
+        sse = np.sum(self.weights_ * (errors**2))
 
         return sse
 
@@ -488,12 +481,12 @@ if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        seasons=["2024/2025"],
+        # seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime)
+    weights = dixon_coles_weights(train_df.datetime, xi=0.0018)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -505,7 +498,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train)
+    model.fit(X_train, y_train, Z=Z_train, weights=weights)
 
     # Display team ratings
     print(model.get_team_ratings())

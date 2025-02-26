@@ -41,10 +41,8 @@ class ZSD(BaseModel):
         Indices of home teams
     away_idx_ : np.ndarray
         Indices of away teams
-    ratings_weights_ : np.ndarray
+    weights_ : np.ndarray
         Weights for rating optimization
-    match_weights_ : np.ndarray
-        Weights for spread prediction
     is_fitted_ : bool
         Whether the model has been fitted
     params_ : np.ndarray
@@ -84,37 +82,32 @@ class ZSD(BaseModel):
         self,
         X: pd.DataFrame,
         y: Optional[Union[np.ndarray, pd.Series]] = None,
-        Z: pd.DataFrame = None,
-        ratings_weights: Optional[np.ndarray] = None,
-        match_weights: Optional[np.ndarray] = None,
-        initial_params: Optional[Union[np.ndarray, dict]] = None,
+        Z: Optional[pd.DataFrame] = None,
+        weights: Optional[np.ndarray] = None,
     ) -> "ZSD":
         """
-        Fit the ZSD model to the training data.
+        Fit the ZSD model.
 
         Parameters
         ----------
         X : pd.DataFrame
-            DataFrame containing match data with at least two columns:
+            DataFrame containing match data with two columns:
             - First column: Home team names (string)
             - Second column: Away team names (string)
             If y is None, X must have a third column with goal differences.
         y : Optional[Union[np.ndarray, pd.Series]], default=None
             Goal differences (home - away). If provided, this will be used instead of
             the third column in X.
-        Z : pd.DataFrame
-            Additional data for the model, containing at least 'home_goals' and 'away_goals' columns.
-        ratings_weights : Optional[np.ndarray], default=None
+        Z : Optional[pd.DataFrame], default=None
+            Additional data for the model, such as home_goals and away_goals.
+            No column name checking is performed, only dimension validation.
+        weights : Optional[np.ndarray], default=None
             Weights for rating optimization
-        match_weights : Optional[np.ndarray], default=None
-            Weights for spread prediction
-        initial_params : Optional[Union[np.ndarray, dict]], default=None
-            Optional initial parameter values
 
         Returns
         -------
         self : ZSD
-            The fitted ZSD model instance.
+            Fitted model
         """
         try:
             # Validate input dimensions and types
@@ -167,24 +160,19 @@ class ZSD(BaseModel):
 
             # Set weights
             n_matches = len(X)
-            self.ratings_weights_ = (
-                np.ones(n_matches) if ratings_weights is None else ratings_weights
-            )
-            self.match_weights_ = (
-                np.ones(n_matches) if match_weights is None else match_weights
-            )
+            self.weights_ = np.ones(n_matches) if weights is None else weights
 
             self._calculate_scoring_statistics()
 
             # Optimize
-            self.params_ = self._optimize_parameters(initial_params)
+            self.params_ = self._optimize_parameters()
 
             # Fit spread model
             pred_scores = self._predict_scores()
             predictions = pred_scores["home"] - pred_scores["away"]
             residuals = self.goal_difference_ - predictions
-            weighted_sse = np.sum(self.match_weights_ * (residuals**2))
-            self.spread_error_ = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
+            sse = np.sum((residuals**2))
+            self.spread_error_ = np.sqrt(sse / (len(y) - X.shape[1]))
 
             self.is_fitted_ = True
             return self
@@ -304,16 +292,9 @@ class ZSD(BaseModel):
 
         return probabilities
 
-    def _optimize_parameters(
-        self, initial_params: Optional[Union[np.ndarray, dict]] = None
-    ) -> np.ndarray:
+    def _optimize_parameters(self) -> np.ndarray:
         """
         Optimize model parameters using SLSQP optimization.
-
-        Parameters
-        ----------
-        initial_params : Optional[Union[np.ndarray, dict]], default=None
-            Optional initial parameter values
 
         Returns
         -------
@@ -334,7 +315,7 @@ class ZSD(BaseModel):
         ]
 
         bounds = [(-50, 50)] * (2 * self.n_teams_) + [(-np.inf, np.inf)] * 2
-        x0 = self._get_initial_params(initial_params)
+        x0 = self._get_initial_params()
 
         result = minimize(
             fun=self._sse_function,
@@ -373,7 +354,7 @@ class ZSD(BaseModel):
         squared_errors = (self.home_goals_ - pred_scores["home"]) ** 2 + (
             self.away_goals_ - pred_scores["away"]
         ) ** 2
-        return np.sum(self.ratings_weights_ * squared_errors)
+        return np.sum(squared_errors * self.weights_)
 
     def _predict_scores(
         self,
@@ -566,23 +547,9 @@ class ZSD(BaseModel):
                 "Invalid scoring statistics: zero or negative standard deviation"
             )
 
-    def _get_initial_params(
-        self, initial_params: Optional[Union[np.ndarray, dict]]
-    ) -> np.ndarray:
+    def _get_initial_params(self) -> np.ndarray:
         """
         Generate initial parameters, incorporating any provided values.
-
-        Parameters
-        ----------
-        initial_params : Optional[Union[np.ndarray, dict]]
-            Optional initial parameter values as either:
-                - np.ndarray: Full parameter vector of length 2*n_teams_ + 2
-                - dict: Parameters with keys:
-                    'teams': list of team names in order
-                    'home': list of home ratings
-                    'away': list of away ratings
-                    'factors': tuple of (home_factor, away_factor)
-                - None: Use random initialization
 
         Returns
         -------
@@ -594,54 +561,7 @@ class ZSD(BaseModel):
         ValueError
             If parameters are invalid or don't match teams
         """
-        if initial_params is None:
-            return np.random.normal(0, 0.1, 2 * self.n_teams_ + 2)
-
-        if isinstance(initial_params, np.ndarray):
-            if len(initial_params) != 2 * self.n_teams_ + 2:
-                raise ValueError(f"Expected {2 * self.n_teams_ + 2} parameters")
-            return initial_params.copy()
-
-        if not isinstance(initial_params, dict):
-            raise ValueError("initial_params must be array, dict, or None")
-
-        # Verify teams match
-        if "teams" not in initial_params:
-            raise ValueError("Missing 'teams' in initial_params")
-        if set(initial_params["teams"]) != set(self.teams_):
-            raise ValueError("Provided teams don't match model teams")
-
-        # Create parameter vector
-        x0 = np.zeros(2 * self.n_teams_ + 2)
-
-        # Map parameters according to team order
-        team_indices = {team: i for i, team in enumerate(initial_params["teams"])}
-        model_indices = {i: team_indices[team] for i, team in enumerate(self.teams_)}
-
-        # Set home ratings
-        if "home" in initial_params:
-            home = initial_params["home"]
-            if len(home) != self.n_teams_:
-                raise ValueError(f"Expected {self.n_teams_} home ratings")
-            for i in range(self.n_teams_):
-                x0[i] = home[model_indices[i]]
-
-        # Set away ratings
-        if "away" in initial_params:
-            away = initial_params["away"]
-            if len(away) != self.n_teams_:
-                raise ValueError(f"Expected {self.n_teams_} away ratings")
-            for i in range(self.n_teams_):
-                x0[i + self.n_teams_] = away[model_indices[i]]
-
-        # Set factors
-        if "factors" in initial_params:
-            factors = initial_params["factors"]
-            if len(factors) != 2:
-                raise ValueError("Expected 2 factors (home, away)")
-            x0[-2:] = factors
-
-        return x0
+        return np.random.normal(0, 0.1, 2 * self.n_teams_ + 2)
 
     def get_team_ratings(self) -> pd.DataFrame:
         """
@@ -662,22 +582,18 @@ class ZSD(BaseModel):
         ).set_index("team")
 
     def get_params(self) -> dict:
-        """
-        Get the current parameters of the model.
-        """
+        """Get model parameters."""
         return {
-            "ratings_weights": self.ratings_weights_,
-            "match_weights": self.match_weights_,
+            "teams": self.teams_,
+            "team_map": self.team_map_,
             "params": self.params_,
             "is_fitted": self.is_fitted_,
         }
 
     def set_params(self, params: dict) -> None:
-        """
-        Set parameters for the model.
-        """
-        self.ratings_weights_ = params["ratings_weights"]
-        self.match_weights_ = params["match_weights"]
+        """Set model parameters."""
+        self.teams_ = params["teams"]
+        self.team_map_ = params["team_map"]
         self.params_ = params["params"]
         self.is_fitted_ = params["is_fitted"]
 
@@ -687,12 +603,12 @@ if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        seasons=["2024/2025"],
+        # seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime)
+    weights = dixon_coles_weights(train_df.datetime, xi=0.0018)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -704,7 +620,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train)
+    model.fit(X_train, y_train, Z=Z_train, weights=weights)
 
     # Display team ratings
     print(model.get_team_ratings())
@@ -722,3 +638,5 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
+
+# %%

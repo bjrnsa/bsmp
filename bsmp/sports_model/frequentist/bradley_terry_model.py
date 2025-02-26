@@ -58,8 +58,7 @@ class BradleyTerry(BaseModel):
         X: pd.DataFrame,
         y: Optional[Union[np.ndarray, pd.Series]] = None,
         Z: Optional[pd.DataFrame] = None,
-        ratings_weights: Optional[np.ndarray] = None,
-        match_weights: Optional[np.ndarray] = None,
+        weights: Optional[np.ndarray] = None,
     ) -> "BradleyTerry":
         """
         Fit the Bradley-Terry model.
@@ -77,10 +76,8 @@ class BradleyTerry(BaseModel):
         Z : Optional[pd.DataFrame], default=None
             Additional data for the model, such as home_goals and away_goals.
             No column name checking is performed, only dimension validation.
-        ratings_weights : Optional[np.ndarray], default=None
+        weights : Optional[np.ndarray], default=None
             Weights for rating optimization
-        match_weights : Optional[np.ndarray], default=None
-            Weights for spread prediction
 
         Returns
         -------
@@ -117,7 +114,6 @@ class BradleyTerry(BaseModel):
             self.result_ = np.zeros_like(self.goal_difference_, dtype=int)
             self.result_[self.goal_difference_ > 0] = 1
             self.result_[self.goal_difference_ < 0] = -1
-            # result = 0 when goal_difference = 0 (draw)
 
             # Team setup
             self.teams_ = np.unique(np.concatenate([self.home_team_, self.away_team_]))
@@ -134,12 +130,7 @@ class BradleyTerry(BaseModel):
 
             # Set weights
             n_matches = len(X)
-            self.ratings_weights_ = (
-                np.ones(n_matches) if ratings_weights is None else ratings_weights
-            )
-            self.match_weights_ = (
-                np.ones(n_matches) if match_weights is None else match_weights
-            )
+            self.weights_ = np.ones(n_matches) if weights is None else weights
 
             # Initialize parameters
             self.params_ = np.zeros(self.n_teams_ + 1)
@@ -302,14 +293,12 @@ class BradleyTerry(BaseModel):
         loss_mask = self.result_ == -1
         draw_mask = ~(win_mask | loss_mask)
 
+        log_likelihood += np.sum(self.weights_[win_mask] * np.log(win_probs[win_mask]))
         log_likelihood += np.sum(
-            self.ratings_weights_[win_mask] * np.log(win_probs[win_mask])
+            self.weights_[loss_mask] * np.log(1 - win_probs[loss_mask])
         )
         log_likelihood += np.sum(
-            self.ratings_weights_[loss_mask] * np.log(1 - win_probs[loss_mask])
-        )
-        log_likelihood += np.sum(
-            self.ratings_weights_[draw_mask]
+            self.weights_[draw_mask]
             * (np.log(win_probs[draw_mask]) + np.log(1 - win_probs[draw_mask]))
         )
 
@@ -345,16 +334,14 @@ class BradleyTerry(BaseModel):
         return 1 / (1 + np.exp(-x))
 
     def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
-        """Fit weighted OLS regression using match weights."""
+        """Fit OLS no weights."""
         X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights_)
 
         # Use more efficient matrix operations
-        XtW = X.T @ W
-        coefficients = np.linalg.solve(XtW @ X, XtW @ y)
+        coefficients = np.linalg.solve(X.T @ X, X.T @ y)
         residuals = y - X @ coefficients
-        weighted_sse = residuals.T @ W @ residuals
-        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
+        sse = np.sum((residuals**2))
+        std_error = np.sqrt(sse / (len(y) - X.shape[1]))
 
         return coefficients, std_error
 
@@ -408,12 +395,12 @@ if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        seasons=["2024/2025"],
+        # seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime)
+    weights = dixon_coles_weights(train_df.datetime, xi=0.0018)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -425,7 +412,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train)
+    model.fit(X_train, y_train, Z=Z_train, weights=weights)
 
     # Display team ratings
     print(model.get_team_ratings())
@@ -443,3 +430,5 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
+
+# %%

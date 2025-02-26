@@ -1,6 +1,6 @@
 # %%
 
-from typing import Dict, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -35,7 +35,7 @@ class PRP(ZSD):
         Indices of home teams
     away_idx_ : np.ndarray
         Indices of away teams
-    ratings_weights_ : np.ndarray
+    weights_ : np.ndarray
         Weights for rating optimization
     match_weights_ : np.ndarray
         Weights for spread prediction
@@ -202,18 +202,58 @@ class PRP(ZSD):
             }
         ).set_index("team")
 
+    def fit(
+        self,
+        X: pd.DataFrame,
+        y: Optional[Union[np.ndarray, pd.Series]] = None,
+        Z: Optional[pd.DataFrame] = None,
+        weights: Optional[np.ndarray] = None,
+    ) -> "PRP":
+        """
+        Fit the PRP model.
+
+        Parameters
+        ----------
+        X : pd.DataFrame
+            DataFrame containing match data with two columns:
+            - First column: Home team names (string)
+            - Second column: Away team names (string)
+            If y is None, X must have a third column with goal differences.
+        y : Optional[Union[np.ndarray, pd.Series]], default=None
+            Goal differences (home - away). If provided, this will be used instead of
+            the third column in X.
+        Z : Optional[pd.DataFrame], default=None
+            Additional data for the model, such as home_goals and away_goals.
+            No column name checking is performed, only dimension validation.
+        weights : Optional[np.ndarray], default=None
+            Weights for rating optimization
+
+        Returns
+        -------
+        self : PRP
+            Fitted model
+        """
+        # Set weights
+        n_matches = len(X)
+        self.weights_ = np.ones(n_matches) if weights is None else weights
+
+        # Fit the model
+        super().fit(X, y, Z)
+
+        return self
+
 
 # %%
 if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        seasons=["2024/2025"],
+        # seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime)
+    weights = dixon_coles_weights(train_df.datetime, xi=0.0018)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -225,7 +265,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train)
+    model.fit(X_train, y_train, Z=Z_train, weights=weights)
 
     # Display team ratings
     print(model.get_team_ratings())
