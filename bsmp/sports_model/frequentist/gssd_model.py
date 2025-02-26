@@ -1,5 +1,5 @@
 # %%
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -8,10 +8,11 @@ from scipy.optimize import minimize
 from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
+from bsmp.sports_model.frequentist.base_model import BaseModel
 from bsmp.sports_model.utils import dixon_coles_weights
 
 
-class GSSD:
+class GSSD(BaseModel):
     """
     Generalized Scores Standard Deviation (GSSD) model with scikit-learn-like API.
 
@@ -49,6 +50,7 @@ class GSSD:
 
     def __init__(self) -> None:
         """Initialize GSSD model."""
+        super().__init__()
         self.is_fitted_ = False
 
     def fit(
@@ -119,7 +121,6 @@ class GSSD:
             self.away_goals_ = Z.iloc[:, 1].to_numpy()
 
             # Team setup
-            # Team setup
             self.teams_ = np.unique(np.concatenate([self.home_team_, self.away_team_]))
             self.n_teams_ = len(self.teams_)
             self.team_map_ = {team: idx for idx, team in enumerate(self.teams_)}
@@ -146,9 +147,7 @@ class GSSD:
 
             # Prepare features and fit model
             features = np.column_stack((self.pfh_, self.pah_, self.pfa_, self.paa_))
-            initial_guess = np.array(
-                [0.1, 1.0, 1.0, -1.0, -1.0]
-            )  # [intercept, pfh, pah, pfa, paa]
+            initial_guess = np.array([0.1, 1.0, 1.0, -1.0, -1.0])
             result = minimize(
                 self._sse_function,
                 initial_guess,
@@ -165,9 +164,9 @@ class GSSD:
 
             # Calculate spread error
             predictions = self._get_predictions(features)
-            (self.intercept_, self.spread_coefficient_), self.spread_error_ = (
-                self._fit_ols(self.goal_difference_, predictions)
-            )
+            residuals = self.goal_difference_ - predictions
+            weighted_sse = np.sum(self.match_weights_ * (residuals**2))
+            self.spread_error_ = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
 
             self.is_fitted_ = True
             return self
@@ -218,16 +217,12 @@ class GSSD:
             away_off, away_def = self.team_ratings_[away_team][2:]
 
             # Calculate spread
-            predicted_spread = (
+            predicted_spreads[i] = (
                 self.const_
                 + home_off * self.pfh_coeff_
                 + home_def * self.pah_coeff_
                 + away_off * self.pfa_coeff_
                 + away_def * self.paa_coeff_
-            )
-
-            predicted_spreads[i] = (
-                self.intercept_ + self.spread_coefficient_ * predicted_spread
             )
 
         return predicted_spreads
@@ -288,10 +283,6 @@ class GSSD:
                 + away_def * self.paa_coeff_
             )
 
-            predicted_spread = (
-                self.intercept_ + self.spread_coefficient_ * predicted_spread
-            )
-
             # Calculate probabilities
             if include_draw:
                 thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
@@ -304,6 +295,42 @@ class GSSD:
                 probabilities[i] = [prob_home, 1 - prob_home]
 
         return probabilities
+
+    def get_params(self) -> dict:
+        """
+        Get the current parameters of the model.
+
+        Returns
+        -------
+        dict
+            Dictionary containing model parameters
+        """
+        return {
+            "intercept": self.intercept_,
+            "pfh_coeff": self.pfh_coeff_,
+            "pah_coeff": self.pah_coeff_,
+            "pfa_coeff": self.pfa_coeff_,
+            "paa_coeff": self.paa_coeff_,
+            "params": self.team_ratings_,
+            "is_fitted": self.is_fitted_,
+        }
+
+    def set_params(self, params: dict) -> None:
+        """
+        Set parameters for the model.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary containing model parameters, as returned by get_params()
+        """
+        self.intercept_ = params["intercept"]
+        self.pfh_coeff_ = params["pfh_coeff"]
+        self.pah_coeff_ = params["pah_coeff"]
+        self.pfa_coeff_ = params["pfa_coeff"]
+        self.paa_coeff_ = params["paa_coeff"]
+        self.team_ratings_ = params["params"]
+        self.is_fitted_ = params["is_fitted"]
 
     def _sse_function(self, parameters: np.ndarray) -> float:
         """
@@ -427,82 +454,6 @@ class GSSD:
                 # Team hasn't played any games (shouldn't happen with proper data)
                 self.team_ratings_[team] = np.zeros(4)
 
-    def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Fit weighted OLS regression using match weights.
-
-        Parameters
-        ----------
-        y : np.ndarray
-            The dependent variable.
-        X : np.ndarray
-            The independent variables.
-
-        Returns
-        -------
-        Tuple[np.ndarray, float]
-            Coefficients and standard error.
-        """
-        X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights_)
-
-        # Use more efficient matrix operations
-        XtW = X.T @ W
-        coefficients = np.linalg.solve(XtW @ X, XtW @ y)
-        residuals = y - X @ coefficients
-        weighted_sse = residuals.T @ W @ residuals
-        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
-
-        return coefficients, std_error
-
-    def _validate_X(self, X: pd.DataFrame, fit: bool = True) -> None:
-        """
-        Validate input DataFrame dimensions and types.
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Input data
-        fit : bool, default=True
-            Whether this is being called during fit (requires at least 2 columns)
-            or during predict (requires exactly 2 columns)
-        """
-        # Check if X is a DataFrame
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("X must be a pandas DataFrame")
-
-        # Check minimum number of columns
-        min_cols = 2
-        if X.shape[1] < min_cols:
-            raise ValueError(f"X must have at least {min_cols} columns")
-
-        # For predict methods, exactly 2 columns are required
-        if not fit and X.shape[1] != 2:
-            raise ValueError("X must have exactly 2 columns for prediction")
-
-        # Check that first two columns contain strings (team names)
-        for i in range(2):
-            if not pd.api.types.is_string_dtype(X.iloc[:, i]):
-                raise ValueError(f"Column {i} must contain string values (team names)")
-
-    def _validate_teams(self, teams: List[str]) -> None:
-        """
-        Validate teams exist in the model.
-
-        Parameters
-        ----------
-        teams : List[str]
-            List of team names to validate
-        """
-        for team in teams:
-            if team not in self.team_ratings_:
-                raise ValueError(f"Unknown team: {team}")
-
-    def _check_is_fitted(self) -> None:
-        """Check if the model is fitted."""
-        if not self.is_fitted_:
-            raise ValueError("Model has not been fitted yet.")
-
     def get_team_ratings(self) -> pd.DataFrame:
         """
         Get team ratings as a DataFrame.
@@ -510,30 +461,26 @@ class GSSD:
         Returns
         -------
         pd.DataFrame
-            DataFrame with team ratings
+            DataFrame with team ratings and model coefficients
         """
         self._check_is_fitted()
-        return pd.DataFrame(
+
+        # Get team ratings
+        ratings_df = pd.DataFrame(
             self.team_ratings_, index=["pfh", "pah", "pfa", "paa"]
-        ).T.round(2)
+        ).T
 
-    def get_team_rating(self, team: str) -> np.ndarray:
-        """
-        Get rating for a specific team.
+        # Add coefficients as a new row
+        coeffs = {
+            "pfh": self.pfh_coeff_,
+            "pah": self.pah_coeff_,
+            "pfa": self.pfa_coeff_,
+            "paa": self.paa_coeff_,
+        }
+        ratings_df.loc["Coefficients"] = pd.Series(coeffs)
+        ratings_df.loc["Intercept"] = self.const_
 
-        Parameters
-        ----------
-        team : str
-            Team name
-
-        Returns
-        -------
-        np.ndarray
-            Team ratings [pfh, pah, pfa, paa]
-        """
-        self._check_is_fitted()
-        self._validate_teams([team])
-        return np.round(self.team_ratings_[team], 2)
+        return ratings_df.round(2)
 
 
 # %%
@@ -548,29 +495,17 @@ if __name__ == "__main__":
     )
     team_weights = dixon_coles_weights(train_df.datetime)
 
-    home_team = "Holstebro"
-    away_team = "Skjern"
-
-    # train_df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").iloc[:177]
-    # train_df = train_df.assign(
-    #     goal_difference=train_df["Home Pts"] - train_df["Away Pts"]
-    # )
-    # train_df = train_df.assign(
-    #     home_team=train_df["Home Team"], away_team=train_df["Away Team"]
-    # )
-    # train_df = train_df.assign(
-    #     home_goals=train_df["Home Pts"], away_goals=train_df["Away Pts"]
-    # )
-    # home_team = "St Kilda"
-    # away_team = "North Melbourne"
+    home_team = "Kolding"
+    away_team = "Sonderjyske"
 
     # Create and fit the model
     model = GSSD()
 
     # Prepare training data
-    X_train = train_df[["home_team", "away_team", "home_goals", "away_goals"]]
+    X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
-    model.fit(X_train, y_train)
+    Z_train = train_df[["home_goals", "away_goals"]]
+    model.fit(X_train, y_train, Z=Z_train)
 
     # Display team ratings
     print(model.get_team_ratings())
@@ -588,7 +523,7 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
-    print(f"Home rating: {model.get_team_rating(home_team)}")
-    print(f"Away rating: {model.get_team_rating(away_team)}")
+
+# %%
 
 # %%

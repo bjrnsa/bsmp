@@ -202,29 +202,6 @@ class PRP(ZSD):
             }
         ).set_index("team")
 
-    def get_team_rating(self, team: str) -> Dict[str, float]:
-        """
-        Get ratings for a specific team.
-
-        Parameters
-        ----------
-        team : str
-            Name of the team
-
-        Returns
-        -------
-        Dict[str, float]
-            Dict with keys 'offense' and 'defense'
-        """
-        self._check_is_fitted()
-        self._validate_teams([team])
-
-        idx = self.team_map_[team]
-        return {
-            "offense": self.params_[idx],
-            "defense": self.params_[idx + self.n_teams_],
-        }
-
 
 # %%
 if __name__ == "__main__":
@@ -238,8 +215,8 @@ if __name__ == "__main__":
     )
     team_weights = dixon_coles_weights(train_df.datetime)
 
-    home_team = "GOG"
-    away_team = "Mors"
+    home_team = "Kolding"
+    away_team = "Sonderjyske"
 
     # Create and fit the model
     model = PRP()
@@ -248,7 +225,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train, ratings_weights=team_weights)
+    model.fit(X_train, y_train, Z=Z_train)
 
     # Display team ratings
     print(model.get_team_ratings())
@@ -257,8 +234,8 @@ if __name__ == "__main__":
     X_test = test_df[["home_team", "away_team"]]
 
     # Predict point spreads (goal differences)
-    predicted_spread = model.predict(X_test)
-    print(f"Predicted goal difference: {predicted_spread[0]:.2f}")
+    predicted_spreads = model.predict(X_test)
+    print(f"Predicted goal difference: {predicted_spreads[0]:.2f}")
 
     # Predict probabilities
     probs = model.predict_proba(X_test, point_spread=0, include_draw=True)
@@ -267,7 +244,4 @@ if __name__ == "__main__":
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
 
-    home_ratings = model.get_team_rating(home_team)
-    away_ratings = model.get_team_rating(away_team)
-    print(f"Home ratings: {home_ratings}")
-    print(f"Away ratings: {away_ratings}")
+# %%

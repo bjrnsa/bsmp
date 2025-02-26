@@ -41,7 +41,7 @@ class TOOR(BradleyTerry):
     def __init__(self, home_advantage: float = 0.1) -> None:
         """Initialize TOOR model."""
         super().__init__(home_advantage=home_advantage)
-        self.home_coefficient_ = None
+        self.home_advantage_ = home_advantage
         self.home_team_coef_ = None
         self.away_team_coef_ = None
 
@@ -86,9 +86,7 @@ class TOOR(BradleyTerry):
             super().fit(X, y, Z, ratings_weights, match_weights)
 
             # Optimize the three parameters using least squares
-            initial_guess = np.array(
-                [0.1, 1.0, -1.0]
-            )  # Initial values for [home_adv, home_team, away_team]
+            initial_guess = np.array([0.1, 1.0, -1.0])
             result = minimize(
                 self._sse_function,
                 initial_guess,
@@ -97,19 +95,19 @@ class TOOR(BradleyTerry):
             )
 
             # Store the optimized coefficients
-            self.home_coefficient_ = result.x[0]  # home advantage
+            self.home_advantage_ = result.x[0]  # home advantage
             self.home_team_coef_ = result.x[1]  # home team coefficient
             self.away_team_coef_ = result.x[2]  # away team coefficient
 
             # Calculate spread error
             predictions = (
-                self.home_coefficient_
+                self.home_advantage_
                 + self.home_team_coef_ * self.params_[self.home_idx_]
                 + self.away_team_coef_ * self.params_[self.away_idx_]
             )
-            (self.intercept_, self.spread_coefficient_), self.spread_error_ = (
-                self._fit_ols(self.goal_difference_, predictions)
-            )
+            residuals = self.goal_difference_ - predictions
+            weighted_sse = np.sum(self.match_weights_ * (residuals**2))
+            self.spread_error_ = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
 
             return self
 
@@ -165,10 +163,10 @@ class TOOR(BradleyTerry):
 
             # Calculate predicted spread using team-specific coefficients
             predicted_spreads[i] = (
-                self.home_coefficient_
+                self.home_advantage_
                 + self.home_team_coef_ * home_rating
                 + self.away_team_coef_ * away_rating
-            ) * self.spread_coefficient_ + self.intercept_
+            )
 
         return predicted_spreads
 
@@ -226,10 +224,10 @@ class TOOR(BradleyTerry):
 
             # Calculate predicted spread using team-specific coefficients
             predicted_spread = (
-                self.home_coefficient_
+                self.home_advantage_
                 + self.home_team_coef_ * home_rating
                 + self.away_team_coef_ * away_rating
-            ) * self.spread_coefficient_ + self.intercept_
+            )
 
             # Calculate probabilities
             if include_draw:
@@ -243,6 +241,58 @@ class TOOR(BradleyTerry):
                 probabilities[i] = [prob_home, 1 - prob_home]
 
         return probabilities
+
+    def get_params(self) -> dict:
+        """
+        Get the current parameters of the model.
+
+        Returns
+        -------
+        dict
+            Dictionary containing model parameters
+        """
+        return {
+            "home_advantage": self.home_advantage_,
+            "home_team_coef": self.home_team_coef_,
+            "away_team_coef": self.away_team_coef_,
+            "params": self.params_,
+            "is_fitted": self.is_fitted_,
+        }
+
+    def set_params(self, params: dict) -> None:
+        """
+        Set parameters for the model.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary containing model parameters, as returned by get_params()
+        """
+        self.home_advantage_ = params["home_advantage"]
+        self.home_team_coef_ = params["home_team_coef"]
+        self.away_team_coef_ = params["away_team_coef"]
+        self.params_ = params["params"]
+        self.is_fitted_ = params["is_fitted"]
+
+    def get_team_ratings(self) -> pd.DataFrame:
+        """
+        Get team ratings as a DataFrame with home and away coefficients.
+
+        Returns
+        -------
+        pd.DataFrame
+            DataFrame with team ratings multiplied by home and away coefficients
+        """
+        self._check_is_fitted()
+        df = pd.DataFrame(
+            {
+                "home": self.params_[:-1] * self.home_team_coef_,
+                "away": self.params_[:-1] * self.away_team_coef_,
+            },
+            index=self.teams_,
+        )
+        df.loc["Home Advantage"] = [self.home_advantage_, np.nan]
+        return df
 
     def _sse_function(self, parameters: np.ndarray) -> float:
         """
@@ -289,32 +339,27 @@ if __name__ == "__main__":
     )
     team_weights = dixon_coles_weights(train_df.datetime)
 
-    # train_df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").iloc[:176]
-    # train_df = train_df.assign(
-    #     goal_difference=train_df["Home Pts"] - train_df["Away Pts"]
-    # )
-    # train_df = train_df.assign(
-    #     home_team=train_df["Home Team"], away_team=train_df["Away Team"]
-    # )
-    # home_team = "St Kilda"
-    # away_team = "North Melbourne"
-
     home_team = "Kolding"
     away_team = "Sonderjyske"
 
     # Create and fit the model
     model = TOOR()
 
+    # Prepare training data
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
-    model.fit(X_train, y_train)
-    model.get_team_ratings()
+    Z_train = train_df[["home_goals", "away_goals"]]
+    model.fit(X_train, y_train, Z=Z_train)
 
+    # Display team ratings
+    print(model.get_team_ratings())
+
+    # Create a test DataFrame for prediction
     X_test = test_df[["home_team", "away_team"]]
-    y_test = test_df["goal_difference"]
 
     # Predict point spreads (goal differences)
-    predicted_spread = model.predict(X_test)
+    predicted_spreads = model.predict(X_test)
+    print(f"Predicted goal difference: {predicted_spreads[0]:.2f}")
 
     # Predict probabilities
     probs = model.predict_proba(X_test, point_spread=0, include_draw=True)
@@ -322,7 +367,7 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
-    print(f"Home rating: {model.get_team_rating(home_team):.4f}")
-    print(f"Away rating: {model.get_team_rating(away_team):.4f}")
+
+# %%
 
 # %%

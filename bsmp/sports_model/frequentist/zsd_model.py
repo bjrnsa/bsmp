@@ -1,6 +1,6 @@
 # %%
 import warnings
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -9,6 +9,7 @@ from scipy.optimize import minimize
 from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
+from bsmp.sports_model.frequentist.base_model import BaseModel
 from bsmp.sports_model.utils import dixon_coles_weights
 
 # Suppress the specific warning
@@ -17,7 +18,7 @@ warnings.filterwarnings(
 )
 
 
-class ZSD:
+class ZSD(BaseModel):
     """
     Z-Score Deviation (ZSD) model for predicting sports match outcomes with scikit-learn-like API.
 
@@ -180,10 +181,10 @@ class ZSD:
 
             # Fit spread model
             pred_scores = self._predict_scores()
-            raw_mov = pred_scores["home"] - pred_scores["away"]
-            (self.intercept_, self.spread_coefficient_), self.spread_error_ = (
-                self._fit_ols(self.goal_difference_, raw_mov)
-            )
+            predictions = pred_scores["home"] - pred_scores["away"]
+            residuals = self.goal_difference_ - predictions
+            weighted_sse = np.sum(self.match_weights_ * (residuals**2))
+            self.spread_error_ = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
 
             self.is_fitted_ = True
             return self
@@ -235,8 +236,7 @@ class ZSD:
             )
 
             # Calculate spread
-            raw_mov = pred_scores["home"] - pred_scores["away"]
-            predicted_spreads[i] = self.intercept_ + self.spread_coefficient_ * raw_mov
+            predicted_spreads[i] = pred_scores["home"] - pred_scores["away"]
 
         return predicted_spreads
 
@@ -289,8 +289,7 @@ class ZSD:
             )
 
             # Calculate spread
-            raw_mov = pred_scores["home"] - pred_scores["away"]
-            predicted_spread = self.intercept_ + self.spread_coefficient_ * raw_mov
+            predicted_spread = pred_scores["home"] - pred_scores["away"]
 
             # Calculate probabilities
             if include_draw:
@@ -567,34 +566,6 @@ class ZSD:
                 "Invalid scoring statistics: zero or negative standard deviation"
             )
 
-    def _fit_ols(self, y: np.ndarray, X: np.ndarray) -> Tuple[np.ndarray, float]:
-        """
-        Fit weighted OLS regression using match weights.
-
-        Parameters
-        ----------
-        y : np.ndarray
-            The dependent variable
-        X : np.ndarray
-            The independent variables
-
-        Returns
-        -------
-        Tuple[np.ndarray, float]
-            Coefficients and standard error
-        """
-        X = np.column_stack((np.ones(len(X)), X))
-        W = np.diag(self.match_weights_)
-
-        # Use more efficient matrix operations
-        XtW = X.T @ W
-        coefficients = np.linalg.solve(XtW @ X, XtW @ y)
-        residuals = y - X @ coefficients
-        weighted_sse = residuals.T @ W @ residuals
-        std_error = np.sqrt(weighted_sse / (len(y) - X.shape[1]))
-
-        return coefficients, std_error
-
     def _get_initial_params(
         self, initial_params: Optional[Union[np.ndarray, dict]]
     ) -> np.ndarray:
@@ -672,54 +643,6 @@ class ZSD:
 
         return x0
 
-    def _validate_X(self, X: pd.DataFrame, fit: bool = True) -> None:
-        """
-        Validate input DataFrame dimensions and types.
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Input data
-        fit : bool, default=True
-            Whether this is being called during fit (requires at least 2 columns)
-            or during predict (requires exactly 2 columns)
-        """
-        # Check if X is a DataFrame
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("X must be a pandas DataFrame")
-
-        # Check minimum number of columns
-        min_cols = 2
-        if X.shape[1] < min_cols:
-            raise ValueError(f"X must have at least {min_cols} columns")
-
-        # For predict methods, exactly 2 columns are required
-        if not fit and X.shape[1] != 2:
-            raise ValueError("X must have exactly 2 columns for prediction")
-
-        # Check that first two columns contain strings (team names)
-        for i in range(2):
-            if not pd.api.types.is_string_dtype(X.iloc[:, i]):
-                raise ValueError(f"Column {i} must contain string values (team names)")
-
-    def _validate_teams(self, teams: List[str]) -> None:
-        """
-        Validate teams exist in the model.
-
-        Parameters
-        ----------
-        teams : List[str]
-            List of team names to validate
-        """
-        for team in teams:
-            if team not in self.team_map_:
-                raise ValueError(f"Unknown team: {team}")
-
-    def _check_is_fitted(self) -> None:
-        """Check if the model is fitted."""
-        if not self.is_fitted_:
-            raise ValueError("Model has not been fitted yet.")
-
     def get_team_ratings(self) -> pd.DataFrame:
         """
         Get team ratings as a DataFrame.
@@ -738,27 +661,25 @@ class ZSD:
             {"team": self.teams_, "home": home_ratings, "away": away_ratings}
         ).set_index("team")
 
-    def get_team_rating(self, team: str) -> Tuple[float, float]:
+    def get_params(self) -> dict:
         """
-        Get ratings for a specific team.
-
-        Parameters
-        ----------
-        team : str
-            Name of the team
-
-        Returns
-        -------
-        Tuple[float, float]
-            Tuple of (home_rating, away_rating)
+        Get the current parameters of the model.
         """
-        self._check_is_fitted()
-        self._validate_teams([team])
+        return {
+            "ratings_weights": self.ratings_weights_,
+            "match_weights": self.match_weights_,
+            "params": self.params_,
+            "is_fitted": self.is_fitted_,
+        }
 
-        idx = self.team_map_[team]
-        home_rating = self.params_[idx]
-        away_rating = self.params_[idx + self.n_teams_]
-        return home_rating, away_rating
+    def set_params(self, params: dict) -> None:
+        """
+        Set parameters for the model.
+        """
+        self.ratings_weights_ = params["ratings_weights"]
+        self.match_weights_ = params["match_weights"]
+        self.params_ = params["params"]
+        self.is_fitted_ = params["is_fitted"]
 
 
 # %%
@@ -771,7 +692,7 @@ if __name__ == "__main__":
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime, xi=0.018)
+    team_weights = dixon_coles_weights(train_df.datetime)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -783,7 +704,7 @@ if __name__ == "__main__":
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
     Z_train = train_df[["home_goals", "away_goals"]]
-    model.fit(X_train, y_train, Z=Z_train, ratings_weights=team_weights)
+    model.fit(X_train, y_train, Z=Z_train)
 
     # Display team ratings
     print(model.get_team_ratings())
@@ -801,6 +722,3 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
-
-
-# %%

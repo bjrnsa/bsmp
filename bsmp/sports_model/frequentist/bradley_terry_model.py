@@ -1,6 +1,6 @@
 # %%
 
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -9,10 +9,11 @@ from scipy.optimize import minimize
 from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
+from bsmp.sports_model.frequentist.base_model import BaseModel
 from bsmp.sports_model.utils import dixon_coles_weights
 
 
-class BradleyTerry:
+class BradleyTerry(BaseModel):
     """
     Bradley-Terry model for predicting match outcomes with scikit-learn-like API.
 
@@ -49,7 +50,7 @@ class BradleyTerry:
 
     def __init__(self, home_advantage: float = 0.1) -> None:
         """Initialize Bradley-Terry model."""
-        self.home_advantage = home_advantage
+        self.home_advantage_ = home_advantage
         self.is_fitted_ = False
 
     def fit(
@@ -142,7 +143,7 @@ class BradleyTerry:
 
             # Initialize parameters
             self.params_ = np.zeros(self.n_teams_ + 1)
-            self.params_[-1] = self.home_advantage
+            self.params_[-1] = self.home_advantage_
 
             # Optimize parameters
             self.params_ = self._optimize_parameters()
@@ -357,47 +358,6 @@ class BradleyTerry:
 
         return coefficients, std_error
 
-    def _validate_X(self, X: pd.DataFrame, fit: bool = True) -> None:
-        """
-        Validate input DataFrame dimensions and types.
-
-        Parameters
-        ----------
-        X : pd.DataFrame
-            Input data
-        fit : bool, default=True
-            Whether this is being called during fit (requires at least 2 columns)
-            or during predict (requires exactly 2 columns)
-        """
-        # Check if X is a DataFrame
-        if not isinstance(X, pd.DataFrame):
-            raise ValueError("X must be a pandas DataFrame")
-
-        # Check minimum number of columns
-        min_cols = 2
-        if X.shape[1] < min_cols:
-            raise ValueError(f"X must have at least {min_cols} columns")
-
-        # For predict methods, exactly 2 columns are required
-        if not fit and X.shape[1] != 2:
-            raise ValueError("X must have exactly 2 columns for prediction")
-
-        # Check that first two columns contain strings (team names)
-        for i in range(2):
-            if not pd.api.types.is_string_dtype(X.iloc[:, i]):
-                raise ValueError(f"Column {i} must contain string values (team names)")
-
-    def _validate_teams(self, teams: List[str]) -> None:
-        """Validate teams exist in the model."""
-        for team in teams:
-            if team not in self.team_map_:
-                raise ValueError(f"Unknown team: {team}")
-
-    def _check_is_fitted(self) -> None:
-        """Check if the model is fitted."""
-        if not self.is_fitted_:
-            raise ValueError("Model has not been fitted yet.")
-
     def get_team_ratings(self) -> pd.DataFrame:
         """
         Get team ratings as a DataFrame.
@@ -408,28 +368,39 @@ class BradleyTerry:
             DataFrame with team ratings
         """
         self._check_is_fitted()
-        print(f"Home advantage: {self.params_[-1]}")
         return pd.DataFrame(
-            {"team": self.teams_, "rating": self.params_[:-1]}
-        ).set_index("team")
+            data=self.params_,
+            index=list(self.teams_) + ["Home Advantage"],
+            columns=["rating"],
+        )
 
-    def get_team_rating(self, team: str) -> float:
+    def get_params(self) -> dict:
         """
-        Get rating for a specific team.
-
-        Parameters
-        ----------
-        team : str
-            Team name
+        Get the current parameters of the model.
 
         Returns
         -------
-        float
-            Team rating
+        dict
+            Dictionary containing model parameters
         """
-        self._check_is_fitted()
-        self._validate_teams([team])
-        return self.params_[self.team_map_[team]]
+        return {
+            "home_advantage": self.home_advantage_,
+            "params": self.params_,
+            "is_fitted": self.is_fitted_,
+        }
+
+    def set_params(self, params: dict) -> None:
+        """
+        Set parameters for the model.
+
+        Parameters
+        ----------
+        params : dict
+            Dictionary containing model parameters, as returned by get_params()
+        """
+        self.home_advantage_ = params["home_advantage"]
+        self.params_ = params["params"]
+        self.is_fitted_ = params["is_fitted"]
 
 
 # %%
@@ -437,12 +408,12 @@ if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        # seasons=["2024/2025"],
+        seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime, xi=0.018)
+    team_weights = dixon_coles_weights(train_df.datetime)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -450,16 +421,21 @@ if __name__ == "__main__":
     # Create and fit the model
     model = BradleyTerry()
 
+    # Prepare training data
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
-    model.fit(X_train, y_train, ratings_weights=team_weights)
-    model.get_team_ratings()
+    Z_train = train_df[["home_goals", "away_goals"]]
+    model.fit(X_train, y_train, Z=Z_train)
 
+    # Display team ratings
+    print(model.get_team_ratings())
+
+    # Create a test DataFrame for prediction
     X_test = test_df[["home_team", "away_team"]]
-    y_test = test_df["goal_difference"]
 
     # Predict point spreads (goal differences)
-    predicted_spread = model.predict(X_test)
+    predicted_spreads = model.predict(X_test)
+    print(f"Predicted goal difference: {predicted_spreads[0]:.2f}")
 
     # Predict probabilities
     probs = model.predict_proba(X_test, point_spread=0, include_draw=True)
@@ -467,7 +443,3 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
-    print(f"Home rating: {model.get_team_rating(home_team):.4f}")
-    print(f"Away rating: {model.get_team_rating(away_team):.4f}")
-
-# %%
