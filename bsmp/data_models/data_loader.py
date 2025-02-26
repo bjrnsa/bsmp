@@ -223,7 +223,7 @@ class MatchDataLoader:
             If there is a database error.
         """
         odds_query = f"""
-            SELECT flashscore_id, bookmaker, home_win_odds, draw_odds, away_win_odds
+            SELECT flashscore_id, bookmaker, home_win_odds as home_odds, draw_odds as draw_odds, away_win_odds as away_odds
             FROM handball_odds_data
             WHERE flashscore_id in {tuple(match_ids)}
         """

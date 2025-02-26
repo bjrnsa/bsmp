@@ -437,18 +437,12 @@ if __name__ == "__main__":
     loader = MatchDataLoader(sport="handball")
     df = loader.load_matches(
         league="Herre Handbold Ligaen",
-        seasons=["2024/2025"],
+        # seasons=["2024/2025"],
     )
     train_df, test_df = train_test_split(
         df, test_size=0.2, random_state=42, shuffle=False
     )
-    team_weights = dixon_coles_weights(train_df.datetime)
-
-    # train_df = pd.read_csv("bsmp/sports_model/frequentist/afl_data.csv").iloc[:176]
-    # train_df = train_df.assign(goal_difference=train_df["Home Pts"] - train_df["Away Pts"])
-    # train_df = train_df.assign(home_team=train_df["Home Team"], away_team=train_df["Away Team"])
-    # home_team = "St Kilda"
-    # away_team = "North Melbourne"
+    team_weights = dixon_coles_weights(train_df.datetime, xi=0.018)
 
     home_team = "Kolding"
     away_team = "Sonderjyske"
@@ -458,7 +452,7 @@ if __name__ == "__main__":
 
     X_train = train_df[["home_team", "away_team"]]
     y_train = train_df["goal_difference"]
-    model.fit(X_train, y_train)
+    model.fit(X_train, y_train, ratings_weights=team_weights)
     model.get_team_ratings()
 
     X_test = test_df[["home_team", "away_team"]]

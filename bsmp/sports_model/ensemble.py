@@ -110,7 +110,6 @@ class Ensemble:
 
             # Prepare data for each model based on its requirements
             for name, model in self.models.items():
-                print(f"Fitting {name} model...")
                 model.fit(X, y, Z, ratings_weights, match_weights)
 
             self.is_fitted_ = True
@@ -242,9 +241,6 @@ class Ensemble:
 
         # Print coefficients for transparency
         coeffs = self.spread_ensemble_.coef_ / np.sum(self.spread_ensemble_.coef_)
-        print("Spread Model Coefficients:")
-        for name, coef in zip(self.models.keys(), coeffs):
-            print(f"{name}: {coef:.3f}")
 
         return self
 
@@ -301,7 +297,11 @@ class Ensemble:
         probabilities["ens"] = self.predict_proba(X, Z, include_draw=include_draw)
 
         # Create multi-index DataFrame
-        outcomes = ["home", "draw", "away"] if include_draw else ["home", "away"]
+        outcomes = (
+            ["home_prob", "draw_prob", "away_prob"]
+            if include_draw
+            else ["home_prob", "away_prob"]
+        )
         index = pd.MultiIndex.from_product(
             [X.index, outcomes], names=["match", "outcome"]
         )
@@ -357,7 +357,7 @@ if __name__ == "__main__":
     )
 
     train_df, test_df = train_test_split(
-        df, test_size=0.2, random_state=42, shuffle=False
+        df, test_size=0.5, random_state=42, shuffle=False
     )
 
     weights = dixon_coles_weights(train_df.datetime, xi=0.018)
@@ -410,14 +410,6 @@ if __name__ == "__main__":
         },
         index=["MAE", "MSE"],
     )
-
-    results_df.plot.scatter(x="nnls", y="goal_difference")
-    results_df.describe()
-    # %%
-    # Make probability predictions
-
-    # Get individual model probabilities
-    model_probas = ensemble.get_model_probabilities(X_test, Z_test)
 
 
 # %%
