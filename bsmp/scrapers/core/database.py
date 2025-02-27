@@ -1,21 +1,21 @@
+"""This module contains the DatabaseManager class for managing the SQLite database."""
+
 import sqlite3
 from pathlib import Path
 from typing import Iterable
 
 
 class DatabaseManager:
-    """
-    Manages SQLite database connections and operations.
+    """Manages SQLite database connections and operations.
 
-    Attributes
+    Attributes:
     ----------
     db_path : Path
         The path to the SQLite database file.
     """
 
     def __init__(self, db_path: str = "data/processed/database.db"):
-        """
-        Initializes the DatabaseManager with the specified database path.
+        """Initializes the DatabaseManager with the specified database path.
 
         Parameters
         ----------
@@ -26,10 +26,9 @@ class DatabaseManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def __enter__(self):
-        """
-        Enters the runtime context related to this object.
+        """Enters the runtime context related to this object.
 
-        Returns
+        Returns:
         -------
         sqlite3.Cursor
             The SQLite cursor object.
@@ -38,8 +37,7 @@ class DatabaseManager:
         return self.conn.cursor()
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        Exits the runtime context related to this object.
+        """Exits the runtime context related to this object.
 
         Parameters
         ----------
@@ -54,8 +52,7 @@ class DatabaseManager:
         self.conn.close()
 
     def execute_batch(self, query: str, data: Iterable[tuple]):
-        """
-        Executes a batch of SQL queries.
+        """Executes a batch of SQL queries.
 
         Parameters
         ----------

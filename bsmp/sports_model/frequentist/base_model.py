@@ -1,3 +1,5 @@
+"""This module contains the abstract base class for predictive models used in sports betting analysis."""
+
 from abc import ABC, abstractmethod
 from typing import List, Optional, Union
 
@@ -6,9 +8,12 @@ import pandas as pd
 
 
 class BaseModel(ABC):
-    """
-    Abstract base class for predictive models.
-    """
+    """Abstract base class for predictive models."""
+
+    def __init__(self):
+        """Initialize the BaseModel with default attributes."""
+        self.team_map_ = {}
+        self.is_fitted_ = False
 
     @abstractmethod
     def fit(
@@ -18,16 +23,12 @@ class BaseModel(ABC):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "BaseModel":
-        """
-        Fit the model to the data.
-        """
+        """Fit the model to the data."""
         pass
 
     @abstractmethod
     def predict(self, X: pd.DataFrame) -> np.ndarray:
-        """
-        Predict outcomes based on the fitted model.
-        """
+        """Predict outcomes based on the fitted model."""
         pass
 
     @abstractmethod
@@ -39,35 +40,26 @@ class BaseModel(ABC):
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Predict match outcome probabilities.
-        """
+        """Predict match outcome probabilities."""
         pass
 
     @abstractmethod
     def get_params(self) -> dict:
-        """
-        Get the current parameters of the model.
-        """
+        """Get the current parameters of the model."""
         pass
 
     @abstractmethod
     def set_params(self, params: dict) -> None:
-        """
-        Set parameters for the model.
-        """
+        """Set parameters for the model."""
         pass
 
     @abstractmethod
     def get_team_ratings(self) -> pd.DataFrame:
-        """
-        Get team ratings as a DataFrame.
-        """
+        """Get team ratings as a DataFrame."""
         pass
 
     def _validate_X(self, X: pd.DataFrame, fit: bool = True) -> None:
-        """
-        Validate input DataFrame dimensions and types.
+        """Validate input DataFrame dimensions and types.
 
         Parameters
         ----------

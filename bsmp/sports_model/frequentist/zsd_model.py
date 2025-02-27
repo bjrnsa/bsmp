@@ -1,4 +1,6 @@
 # %%
+"""Z-Score Deviation (ZSD) model."""
+
 import warnings
 from typing import Dict, Optional, Tuple, Union
 
@@ -19,8 +21,7 @@ warnings.filterwarnings(
 
 
 class ZSD(BaseModel):
-    """
-    Z-Score Deviation (ZSD) model for predicting sports match outcomes with scikit-learn-like API.
+    """Z-Score Deviation (ZSD) model for predicting sports match outcomes with scikit-learn-like API.
 
     The model uses weighted optimization to estimate team performance parameters and
     calculates win/draw/loss probabilities using a normal distribution.
@@ -29,7 +30,7 @@ class ZSD(BaseModel):
     ----------
     None
 
-    Attributes
+    Attributes:
     ----------
     teams_ : np.ndarray
         Unique team identifiers
@@ -65,7 +66,7 @@ class ZSD(BaseModel):
     spread_error_ : float
         Standard error of spread predictions
 
-    Note
+    Note:
     ----
     The model ensures that both offensive and defensive ratings sum to zero
     through optimization constraints, making the ratings interpretable as
@@ -85,8 +86,7 @@ class ZSD(BaseModel):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "ZSD":
-        """
-        Fit the ZSD model.
+        """Fit the ZSD model.
 
         Parameters
         ----------
@@ -104,7 +104,7 @@ class ZSD(BaseModel):
         weights : Optional[np.ndarray], default=None
             Weights for rating optimization
 
-        Returns
+        Returns:
         -------
         self : ZSD
             Fitted model
@@ -172,7 +172,7 @@ class ZSD(BaseModel):
             predictions = pred_scores["home"] - pred_scores["away"]
             residuals = self.goal_difference_ - predictions
             sse = np.sum((residuals**2))
-            self.spread_error_ = np.sqrt(sse / (len(y) - X.shape[1]))
+            self.spread_error_ = np.sqrt(sse / (X.shape[0] - X.shape[1]))
 
             self.is_fitted_ = True
             return self
@@ -184,11 +184,10 @@ class ZSD(BaseModel):
     def predict(
         self,
         X: pd.DataFrame,
-        Z: pd.DataFrame = None,
+        Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Predict point spreads for matches.
+        """Predict point spreads for matches.
 
         Parameters
         ----------
@@ -201,7 +200,7 @@ class ZSD(BaseModel):
         point_spread : float, default=0.0
             Point spread adjustment
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted point spreads (goal differences)
@@ -231,13 +230,12 @@ class ZSD(BaseModel):
     def predict_proba(
         self,
         X: pd.DataFrame,
-        Z: pd.DataFrame = None,
+        Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Predict match outcome probabilities.
+        """Predict match outcome probabilities.
 
         Parameters
         ----------
@@ -254,7 +252,7 @@ class ZSD(BaseModel):
         outcome: Optional[str], default=None
             Outcome to predict (home_win, draw, away_win)
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Array of shape (n_samples, n_classes) with probabilities
@@ -317,15 +315,14 @@ class ZSD(BaseModel):
         return probabilities
 
     def _optimize_parameters(self) -> np.ndarray:
-        """
-        Optimize model parameters using SLSQP optimization.
+        """Optimize model parameters using SLSQP optimization.
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Optimized parameters
 
-        Raises
+        Raises:
         ------
         RuntimeError
             If optimization fails
@@ -355,16 +352,15 @@ class ZSD(BaseModel):
 
         return result.x
 
-    def _sse_function(self, params) -> float:
-        """
-        Calculate the weighted sum of squared errors for given parameters.
+    def _sse_function(self, params: np.ndarray) -> np.float64:
+        """Calculate the weighted sum of squared errors for given parameters.
 
         Parameters
         ----------
         params : np.ndarray
             Model parameters
 
-        Returns
+        Returns:
         -------
         float
             Weighted sum of squared errors
@@ -378,7 +374,7 @@ class ZSD(BaseModel):
         squared_errors = (self.home_goals_ - pred_scores["home"]) ** 2 + (
             self.away_goals_ - pred_scores["away"]
         ) ** 2
-        return np.sum(squared_errors * self.weights_)
+        return np.sum(squared_errors * self.weights_, axis=0)
 
     def _predict_scores(
         self,
@@ -386,10 +382,9 @@ class ZSD(BaseModel):
         away_idx: Union[int, np.ndarray, None] = None,
         home_ratings: Union[np.ndarray, None] = None,
         away_ratings: Union[np.ndarray, None] = None,
-        factors: Union[Tuple[float, float], None] = None,
+        factors: Union[np.ndarray, None] = None,
     ) -> Dict[str, np.ndarray]:
-        """
-        Calculate predicted scores using team ratings and factors.
+        """Calculate predicted scores using team ratings and factors.
 
         Parameters
         ----------
@@ -404,7 +399,7 @@ class ZSD(BaseModel):
         factors : Union[Tuple[float, float], None], default=None
             Optional (home_factor, away_factor) tuple
 
-        Returns
+        Returns:
         -------
         Dict[str, np.ndarray]
             Dict with 'home' and 'away' predicted scores
@@ -438,8 +433,7 @@ class ZSD(BaseModel):
         home_ratings: Union[np.ndarray, None] = None,
         away_ratings: Union[np.ndarray, None] = None,
     ) -> Dict[str, np.ndarray]:
-        """
-        Extract team ratings from parameters.
+        """Extract team ratings from parameters.
 
         Parameters
         ----------
@@ -452,15 +446,19 @@ class ZSD(BaseModel):
         away_ratings : Union[np.ndarray, None], default=None
             Optional away ratings to use
 
-        Returns
+        Returns:
         -------
         Dict[str, np.ndarray]
             Dictionary with team ratings
         """
-        if home_ratings is None:
+        if home_ratings is None and away_ratings is None:
             home_ratings, away_ratings = np.split(self.params_[: 2 * self.n_teams_], 2)
         if home_idx is None:
             home_idx, away_idx = self.home_idx_, self.away_idx_
+
+        assert home_ratings is not None and away_ratings is not None, (
+            "home_ratings and away_ratings must be provided"
+        )
 
         return {
             "home_rating": home_ratings[home_idx],
@@ -470,10 +468,9 @@ class ZSD(BaseModel):
         }
 
     def _parameter_estimate(
-        self, adj_factor: float, home_rating: np.ndarray, away_rating: np.ndarray
+        self, adj_factor: np.float64, home_rating: np.ndarray, away_rating: np.ndarray
     ) -> np.ndarray:
-        """
-        Calculate parameter estimate for score prediction.
+        """Calculate parameter estimate for score prediction.
 
         Parameters
         ----------
@@ -484,7 +481,7 @@ class ZSD(BaseModel):
         away_rating : np.ndarray
             Away team rating
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Parameter estimate
@@ -492,10 +489,9 @@ class ZSD(BaseModel):
         return adj_factor + home_rating - away_rating
 
     def _transform_to_score(
-        self, param: np.ndarray, mean: float, std: float
+        self, param: np.ndarray, mean: np.float64, std: np.float64
     ) -> np.ndarray:
-        """
-        Transform parameter to actual score prediction.
+        """Transform parameter to actual score prediction.
 
         Parameters
         ----------
@@ -506,25 +502,24 @@ class ZSD(BaseModel):
         std : float
             Standard deviation of scores
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted score
         """
         exp_prob = self._logit_transform(param)
         z_score = self._z_inverse(exp_prob)
-        return mean + std * z_score
+        return np.asarray(mean + std * z_score)
 
     def _z_inverse(self, prob: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """
-        Calculate inverse of standard normal CDF.
+        """Calculate inverse of standard normal CDF.
 
         Parameters
         ----------
         prob : Union[float, np.ndarray]
             Probability value(s)
 
-        Returns
+        Returns:
         -------
         Union[float, np.ndarray]
             Z-score(s)
@@ -532,15 +527,14 @@ class ZSD(BaseModel):
         return stats.norm.ppf(prob)
 
     def _logit_transform(self, x: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
-        """
-        Apply logistic transformation with numerical stability.
+        """Apply logistic transformation with numerical stability.
 
         Parameters
         ----------
         x : Union[float, np.ndarray]
             Input value(s)
 
-        Returns
+        Returns:
         -------
         Union[float, np.ndarray]
             Transformed value(s)
@@ -560,10 +554,10 @@ class ZSD(BaseModel):
         )
 
         # Unpack results
-        self.mean_home_score_: float = home_stats[0]
-        self.std_home_score_: float = home_stats[1]
-        self.mean_away_score_: float = away_stats[0]
-        self.std_away_score_: float = away_stats[1]
+        self.mean_home_score_: np.float64 = home_stats[0]
+        self.std_home_score_: np.float64 = home_stats[1]
+        self.mean_away_score_: np.float64 = away_stats[0]
+        self.std_away_score_: np.float64 = away_stats[1]
 
         # Validate statistics
         if not (self.std_home_score_ > 0 and self.std_away_score_ > 0):
@@ -572,15 +566,14 @@ class ZSD(BaseModel):
             )
 
     def _get_initial_params(self) -> np.ndarray:
-        """
-        Generate initial parameters, incorporating any provided values.
+        """Generate initial parameters, incorporating any provided values.
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Complete parameter vector
 
-        Raises
+        Raises:
         ------
         ValueError
             If parameters are invalid or don't match teams
@@ -588,10 +581,9 @@ class ZSD(BaseModel):
         return np.random.normal(0, 0.1, 2 * self.n_teams_ + 2)
 
     def get_team_ratings(self) -> pd.DataFrame:
-        """
-        Get team ratings as a DataFrame.
+        """Get team ratings as a DataFrame.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             Team ratings with columns ['team', 'home', 'away']

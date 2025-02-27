@@ -1,4 +1,5 @@
 # %%
+"""This file contains the implementation of the Points Rating Prediction (PRP) model for predicting sports match outcomes."""
 
 from typing import Dict, Optional, Tuple, Union
 
@@ -12,8 +13,7 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class PRP(ZSD):
-    """
-    Points Rating Prediction (PRP) model for predicting sports match outcomes with scikit-learn-like API.
+    """Points Rating Prediction (PRP) model for predicting sports match outcomes with scikit-learn-like API.
 
     This model extends the ZSD model and estimates offensive and defensive ratings for each team,
     plus adjustment factors. The model uses a simple additive approach for score prediction:
@@ -23,7 +23,7 @@ class PRP(ZSD):
     ----------
     None
 
-    Attributes
+    Attributes:
     ----------
     teams_ : np.ndarray
         Unique team identifiers
@@ -60,10 +60,9 @@ class PRP(ZSD):
         away_idx: Union[int, np.ndarray, None] = None,
         offense_ratings: Union[np.ndarray, None] = None,
         defense_ratings: Union[np.ndarray, None] = None,
-        factors: Union[Tuple[float, float], None] = None,
+        factors: Union[np.ndarray, None] = None,
     ) -> Dict[str, np.ndarray]:
-        """
-        Calculate predicted scores using offensive/defensive ratings.
+        """Calculate predicted scores using offensive/defensive ratings.
 
         Parameters
         ----------
@@ -75,10 +74,10 @@ class PRP(ZSD):
             Optional offensive ratings to use
         defense_ratings : Union[np.ndarray, None], default=None
             Optional defensive ratings to use
-        factors : Union[Tuple[float, float], None], default=None
+        factors : Union[np.ndarray, None], default=None
             Optional (home_factor, away_factor) tuple
 
-        Returns
+        Returns:
         -------
         Dict[str, np.ndarray]
             Dict with 'home' and 'away' predicted scores
@@ -114,8 +113,7 @@ class PRP(ZSD):
         offense_ratings: Union[np.ndarray, None] = None,
         defense_ratings: Union[np.ndarray, None] = None,
     ) -> Dict[str, np.ndarray]:
-        """
-        Extract offensive/defensive ratings from parameters.
+        """Extract offensive/defensive ratings from parameters.
 
         Parameters
         ----------
@@ -128,15 +126,20 @@ class PRP(ZSD):
         defense_ratings : Union[np.ndarray, None], default=None
             Optional defensive ratings to use
 
-        Returns
+        Returns:
         -------
         Dict[str, np.ndarray]
             Dictionary with team ratings
         """
-        if offense_ratings is None:
+        if offense_ratings is None and defense_ratings is None:
             offense_ratings, defense_ratings = np.split(
                 self.params_[: 2 * self.n_teams_], 2
             )
+
+        assert offense_ratings is not None and defense_ratings is not None, (
+            "offense_ratings and defense_ratings must be provided"
+        )
+
         if home_idx is None:
             home_idx, away_idx = self.home_idx_, self.away_idx_
 
@@ -155,8 +158,7 @@ class PRP(ZSD):
         avg_score: float,
         factor: float = 0.5,
     ) -> np.ndarray:
-        """
-        Calculate score prediction.
+        """Calculate score prediction.
 
         Parameters
         ----------
@@ -171,7 +173,7 @@ class PRP(ZSD):
         factor : float, default=0.5
             Home/away adjustment multiplier
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted score
@@ -181,10 +183,9 @@ class PRP(ZSD):
         )
 
     def get_team_ratings(self) -> pd.DataFrame:
-        """
-        Get team ratings as a DataFrame.
+        """Get team ratings as a DataFrame.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             Team ratings with columns ['team', 'offense', 'defense']
@@ -209,8 +210,7 @@ class PRP(ZSD):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "PRP":
-        """
-        Fit the PRP model.
+        """Fit the PRP model.
 
         Parameters
         ----------
@@ -228,7 +228,7 @@ class PRP(ZSD):
         weights : Optional[np.ndarray], default=None
             Weights for rating optimization
 
-        Returns
+        Returns:
         -------
         self : PRP
             Fitted model

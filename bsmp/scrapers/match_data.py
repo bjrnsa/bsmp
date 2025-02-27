@@ -1,8 +1,10 @@
+"""This module contains the MatchDataScraper class for scraping match data from Flashscore."""
+
 import time
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from tqdm import tqdm
 
 from bsmp.scrapers.core.browser import BrowserManager
@@ -21,8 +23,7 @@ class MatchDataScraper:
         config_path: Path = Path("config/flashscore_urls.yaml"),
         db_path: str = "database/database.db",
     ):
-        """
-        Initializes the MatchDataScraper with configuration and database paths.
+        """Initializes the MatchDataScraper with configuration and database paths.
 
         Parameters
         ----------
@@ -36,10 +37,9 @@ class MatchDataScraper:
         self._validate_paths()
 
     def _validate_paths(self) -> None:
-        """
-        Ensure required files and directories exist.
+        """Ensure required files and directories exist.
 
-        Raises
+        Raises:
         ------
         FileNotFoundError
             If the configuration file is missing.
@@ -49,8 +49,7 @@ class MatchDataScraper:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def _calculate_season(self, month: int, year: int) -> str:
-        """
-        Determine season string based on match date.
+        """Determine season string based on match date.
 
         Parameters
         ----------
@@ -59,7 +58,7 @@ class MatchDataScraper:
         year : int
             The year of the match.
 
-        Returns
+        Returns:
         -------
         str
             The season string in the format "YYYY/YYYY".
@@ -67,15 +66,14 @@ class MatchDataScraper:
         return f"{year}/{year + 1}" if month >= 8 else f"{year - 1}/{year}"
 
     def _parse_datetime(self, dt_str: str) -> Tuple[str, int, int]:
-        """
-        Extract datetime components from raw string.
+        """Extract datetime components from raw string.
 
         Parameters
         ----------
         dt_str : str
             The datetime string to parse.
 
-        Returns
+        Returns:
         -------
         Tuple[str, int, int]
             The original datetime string, month, and year.
@@ -87,15 +85,14 @@ class MatchDataScraper:
         return dt_str, month, year
 
     def _parse_period_scores(self, elements: list) -> List[int]:
-        """
-        Safely convert BeautifulSoup elements to integer scores.
+        """Safely convert BeautifulSoup elements to integer scores.
 
         Parameters
         ----------
         elements : list
             List of BeautifulSoup elements containing score data.
 
-        Returns
+        Returns:
         -------
         List[int]
             List of integer scores.
@@ -107,15 +104,14 @@ class MatchDataScraper:
     def _extract_scores(
         self, soup: BeautifulSoup
     ) -> Tuple[int, int, int, int, int, int, str]:
-        """
-        Extract and validate match scores with comprehensive error handling.
+        """Extract and validate match scores with comprehensive error handling.
 
         Parameters
         ----------
         soup : BeautifulSoup
             The BeautifulSoup object containing the page content.
 
-        Returns
+        Returns:
         -------
         Tuple[int, int, int, int, int, int, str]
             The extracted scores and match result.
@@ -153,30 +149,46 @@ class MatchDataScraper:
             return (0, 0, 0, 0, 0, 0, "U")  # 'U' for unknown
 
     def _extract_match_details(self, soup: BeautifulSoup) -> Optional[Tuple]:
-        """
-        Parse complete match details from page content.
+        """Parse complete match details from page content.
 
         Parameters
         ----------
         soup : BeautifulSoup
             The BeautifulSoup object containing the page content.
 
-        Returns
+        Returns:
         -------
         Optional[Tuple]
             The extracted match details, or None if extraction fails.
         """
         try:
             header = soup.find("span", class_="tournamentHeader__country")
-            dt_str, month, year = self._parse_datetime(
-                header.find_next("div", class_="duelParticipant__startTime").text
-            )
+            if not header:
+                raise ValueError("Could not find tournament header")
+            else:
+                dt_header = header.find_next("div", class_="duelParticipant__startTime")
+                if not dt_header:
+                    raise ValueError("Could not find start time")
+                dt_header = dt_header.text
+                assert isinstance(dt_header, str)
+
+            if not isinstance(header, Tag):
+                raise ValueError("Header is not a Tag element")
+            link = header.find("a")
+            if not isinstance(link, Tag):
+                raise ValueError("Could not find league link")
+
+            league = link.text.split(" -")[0].strip()
+            country = header.text.split(":")[0].strip()
+            match_info = header.text.split(" - ")[-1].strip()
+
+            dt_str, month, year = self._parse_datetime(dt_header)
 
             return (
-                header.text.split(":")[0].strip(),  # Country
-                header.find("a").text.split(" -")[0].strip(),  # League
+                country,
+                league,
                 self._calculate_season(month, year),
-                header.text.split(" - ")[-1].strip(),  # Match info
+                match_info,
                 dt_str,
                 *self._extract_teams(soup),
                 *self._extract_scores(soup),
@@ -186,33 +198,29 @@ class MatchDataScraper:
             return None
 
     def _extract_teams(self, soup: BeautifulSoup) -> Tuple[str, str]:
-        """
-        Extract home and away team names.
+        """Extract home and away team names."""
+        home_div = soup.find("div", class_="duelParticipant__home")
+        away_div = soup.find("div", class_="duelParticipant__away")
 
-        Parameters
-        ----------
-        soup : BeautifulSoup
-            The BeautifulSoup object containing the page content.
+        if not isinstance(home_div, Tag) or not isinstance(away_div, Tag):
+            raise ValueError("Could not find team divs")
 
-        Returns
-        -------
-        Tuple[str, str]
-            The home and away team names.
-        """
-        return (
-            soup.find("div", class_="duelParticipant__home")
-            .find("a", class_="participant__participantName participant__overflow")
-            .text.strip(),
-            soup.find("div", class_="duelParticipant__away")
-            .find("a", class_="participant__participantName participant__overflow")
-            .text.strip(),
+        home_link = home_div.find(
+            "a", class_="participant__participantName participant__overflow"
         )
+        away_link = away_div.find(
+            "a", class_="participant__participantName participant__overflow"
+        )
+
+        if not isinstance(home_link, Tag) or not isinstance(away_link, Tag):
+            raise ValueError("Could not find team links")
+
+        return home_link.text.strip(), away_link.text.strip()
 
     def scrape(
         self, batch_size: int = DEFAULT_BATCH_SIZE, headless: bool = True
     ) -> None:
-        """
-        Main scraping workflow with progress tracking.
+        """Main scraping workflow with progress tracking.
 
         Parameters
         ----------
@@ -223,7 +231,7 @@ class MatchDataScraper:
         """
         with DatabaseManager(self.db_path) as cursor:
             cursor.execute("""
-                SELECT m.match_id 
+                SELECT m.match_id
                 FROM handball_match_id m
                 LEFT JOIN handball_match_data d ON m.match_id = d.flashscore_id
                 WHERE d.flashscore_id IS NULL
@@ -258,8 +266,7 @@ class MatchDataScraper:
                 self._store_batch(data_buffer)
 
     def _store_batch(self, data: List[Tuple]) -> None:
-        """
-        Batch insert match records into database.
+        """Batch insert match records into database.
 
         Parameters
         ----------
@@ -280,4 +287,5 @@ class MatchDataScraper:
 
 
 if __name__ == "__main__":
-    pass
+    match_data_scraper = MatchDataScraper()
+    match_data_scraper.scrape()

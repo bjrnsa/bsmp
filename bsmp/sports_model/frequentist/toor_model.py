@@ -1,4 +1,6 @@
 # %%
+"""This file contains the implementation of the Team OLS Optimized Rating (TOOR) model for predicting sports match outcomes."""
+
 from typing import Optional, Union
 
 import numpy as np
@@ -13,8 +15,7 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class TOOR(BradleyTerry):
-    """
-    Team OLS Optimized Rating (TOOR) model with scikit-learn-like API.
+    """Team OLS Optimized Rating (TOOR) model with scikit-learn-like API.
 
     An extension of the Bradley-Terry model that uses team-specific coefficients
     for more accurate point spread predictions. The model combines traditional
@@ -25,7 +26,7 @@ class TOOR(BradleyTerry):
     home_advantage : float, default=0.1
         Initial value for home advantage parameter.
 
-    Attributes
+    Attributes:
     ----------
     Inherits all attributes from BradleyTerry plus:
     home_coefficient_ : float
@@ -52,8 +53,7 @@ class TOOR(BradleyTerry):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "TOOR":
-        """
-        Fit the TOOR model.
+        """Fit the TOOR model.
 
         Parameters
         ----------
@@ -71,7 +71,7 @@ class TOOR(BradleyTerry):
         weights : Optional[np.ndarray], default=None
             Weights for rating optimization
 
-        Returns
+        Returns:
         -------
         self : TOOR
             Fitted model
@@ -102,7 +102,7 @@ class TOOR(BradleyTerry):
             )
             residuals = self.goal_difference_ - predictions
             sse = np.sum((residuals**2))
-            self.spread_error_ = np.sqrt(sse / (len(y) - X.shape[1]))
+            self.spread_error_ = np.sqrt(sse / (X.shape[0] - X.shape[1]))
 
             return self
 
@@ -116,8 +116,7 @@ class TOOR(BradleyTerry):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Predict point spreads for matches using team-specific coefficients.
+        """Predict point spreads for matches using team-specific coefficients.
 
         Parameters
         ----------
@@ -131,7 +130,7 @@ class TOOR(BradleyTerry):
         point_spread : float, default=0.0
             Point spread adjustment
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted point spreads (goal differences)
@@ -173,8 +172,7 @@ class TOOR(BradleyTerry):
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Predict match outcome probabilities using team-specific coefficients.
+        """Predict match outcome probabilities using team-specific coefficients.
 
         Parameters
         ----------
@@ -192,7 +190,7 @@ class TOOR(BradleyTerry):
         outcome: Optional[str], default=None
             Outcome to predict (home_win, draw, away_win)
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Array of shape (n_samples, n_classes) with probabilities
@@ -262,10 +260,9 @@ class TOOR(BradleyTerry):
         return probabilities
 
     def get_params(self) -> dict:
-        """
-        Get the current parameters of the model.
+        """Get the current parameters of the model.
 
-        Returns
+        Returns:
         -------
         dict
             Dictionary containing model parameters
@@ -279,8 +276,7 @@ class TOOR(BradleyTerry):
         }
 
     def set_params(self, params: dict) -> None:
-        """
-        Set parameters for the model.
+        """Set parameters for the model.
 
         Parameters
         ----------
@@ -294,10 +290,9 @@ class TOOR(BradleyTerry):
         self.is_fitted_ = params["is_fitted"]
 
     def get_team_ratings(self) -> pd.DataFrame:
-        """
-        Get team ratings as a DataFrame with home and away coefficients.
+        """Get team ratings as a DataFrame with home and away coefficients.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             DataFrame with team ratings multiplied by home and away coefficients
@@ -314,15 +309,14 @@ class TOOR(BradleyTerry):
         return df
 
     def _sse_function(self, parameters: np.ndarray) -> float:
-        """
-        Calculate sum of squared errors for parameter optimization.
+        """Calculate sum of squared errors for parameter optimization.
 
         Parameters
         ----------
         parameters : np.ndarray
             Array of [home_advantage, home_team_coef, away_team_coef]
 
-        Returns
+        Returns:
         -------
         float
             Sum of squared errors

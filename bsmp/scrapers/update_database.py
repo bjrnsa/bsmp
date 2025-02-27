@@ -1,4 +1,6 @@
 # %%
+"""This module contains the UpdateDatabase class for updating the database."""
+
 from bsmp.scrapers.match_data import MatchDataScraper
 from bsmp.scrapers.match_ids import MatchIDScraper
 from bsmp.scrapers.odds_data import OddsDataScraper

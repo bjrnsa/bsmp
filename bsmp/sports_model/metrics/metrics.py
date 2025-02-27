@@ -1,4 +1,6 @@
 # %%
+"""This file contains the implementation of the Metrics class for evaluating sports models."""
+
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
@@ -13,17 +15,26 @@ from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.ensemble import NNLS, SimpleEnsemble
-from bsmp.sports_model.frequentist import GSSD, PRP, TOOR, ZSD, BradleyTerry, DixonColes
+from bsmp.sports_model.frequentist import GSSD, PRP, TOOR, ZSD, BradleyTerry, Poisson
 from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class Metrics:
+    """Class for calculating and storing metrics for sports models."""
+
     def __init__(
         self,
         predictions: pd.DataFrame,
         probabilities: pd.DataFrame,
         true_values: pd.Series,
     ):
+        """Initialize the Metrics class.
+
+        Args:
+            predictions: pd.DataFrame, predictions from the model
+            probabilities: pd.DataFrame, probabilities from the model
+            true_values: pd.Series, true values
+        """
         self.predictions = predictions
         self.probabilities = probabilities
         self.true_values = true_values
@@ -136,13 +147,13 @@ if __name__ == "__main__":
         PRP(),
         TOOR(),
         ZSD(),
-        DixonColes(),
+        Poisson(),
         SimpleEnsemble(model_names=["zsd", "gssd", "prp"]),
         NNLS(model_names=["zsd", "gssd", "prp"]),
     ]
     predictions = pd.DataFrame(0.0, columns=model_list, index=test_df.index)
     probabilities = pd.DataFrame(0.0, columns=model_list, index=test_df.index)
-    outcome = "home_win"
+    outcome = "draw"
 
     for model_name, model in zip(model_list, models):
         model.fit(

@@ -1,4 +1,6 @@
 # %%
+"""Generalized Scores Standard Deviation (GSSD) model."""
+
 from typing import Optional, Union
 
 import numpy as np
@@ -13,8 +15,7 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class GSSD(BaseModel):
-    """
-    Generalized Scores Standard Deviation (GSSD) model with scikit-learn-like API.
+    """Generalized Scores Standard Deviation (GSSD) model with scikit-learn-like API.
 
     A model that predicts match outcomes using team-specific offensive and defensive ratings.
     The model uses weighted OLS regression to estimate team performance parameters and
@@ -24,7 +25,7 @@ class GSSD(BaseModel):
     ----------
     None
 
-    Attributes
+    Attributes:
     ----------
     teams_ : np.ndarray
         Unique team identifiers
@@ -60,8 +61,7 @@ class GSSD(BaseModel):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "GSSD":
-        """
-        Fit the GSSD model.
+        """Fit the GSSD model.
 
         Parameters
         ----------
@@ -79,7 +79,7 @@ class GSSD(BaseModel):
         weights : Optional[np.ndarray], default=None
             Weights for rating optimization
 
-        Returns
+        Returns:
         -------
         self : GSSD
             Fitted model
@@ -159,7 +159,7 @@ class GSSD(BaseModel):
             predictions = self._get_predictions(features)
             residuals = self.goal_difference_ - predictions
             sse = np.sum((residuals**2))
-            self.spread_error_ = np.sqrt(sse / (len(y) - X.shape[1]))
+            self.spread_error_ = np.sqrt(sse / (X.shape[0] - X.shape[1]))
 
             self.is_fitted_ = True
             return self
@@ -171,11 +171,10 @@ class GSSD(BaseModel):
     def predict(
         self,
         X: pd.DataFrame,
-        Z: pd.DataFrame = None,
+        Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Predict point spreads for matches.
+        """Predict point spreads for matches.
 
         Parameters
         ----------
@@ -188,7 +187,7 @@ class GSSD(BaseModel):
         point_spread : float, default=0.0
             Point spread adjustment
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted point spreads (goal differences)
@@ -223,13 +222,12 @@ class GSSD(BaseModel):
     def predict_proba(
         self,
         X: pd.DataFrame,
-        Z: pd.DataFrame = None,
+        Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Predict match outcome probabilities.
+        """Predict match outcome probabilities.
 
         Parameters
         ----------
@@ -245,7 +243,8 @@ class GSSD(BaseModel):
             Whether to include draw probability
         outcome: Optional[str], default=None
             Outcome to predict (home_win, draw, away_win)
-        Returns
+
+        Returns:
         -------
         np.ndarray
             Array of shape (n_samples, n_classes) with probabilities
@@ -313,10 +312,9 @@ class GSSD(BaseModel):
         return probabilities
 
     def get_params(self) -> dict:
-        """
-        Get the current parameters of the model.
+        """Get the current parameters of the model.
 
-        Returns
+        Returns:
         -------
         dict
             Dictionary containing model parameters
@@ -332,8 +330,7 @@ class GSSD(BaseModel):
         }
 
     def set_params(self, params: dict) -> None:
-        """
-        Set parameters for the model.
+        """Set parameters for the model.
 
         Parameters
         ----------
@@ -349,15 +346,14 @@ class GSSD(BaseModel):
         self.is_fitted_ = params["is_fitted"]
 
     def _sse_function(self, parameters: np.ndarray) -> float:
-        """
-        Calculate sum of squared errors for parameter optimization.
+        """Calculate sum of squared errors for parameter optimization.
 
         Parameters
         ----------
         parameters : np.ndarray
             Array of [intercept, pfh_coeff, pah_coeff, pfa_coeff, paa_coeff]
 
-        Returns
+        Returns:
         -------
         float
             Sum of squared errors
@@ -380,15 +376,14 @@ class GSSD(BaseModel):
         return sse
 
     def _get_predictions(self, features: np.ndarray) -> np.ndarray:
-        """
-        Calculate predictions using current model parameters.
+        """Calculate predictions using current model parameters.
 
         Parameters
         ----------
         features : np.ndarray
             Feature matrix for predictions.
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted values.
@@ -402,8 +397,7 @@ class GSSD(BaseModel):
         )
 
     def _calculate_team_statistics(self, X: pd.DataFrame) -> None:
-        """
-        Calculate and store all team-related statistics.
+        """Calculate and store all team-related statistics.
 
         Parameters
         ----------
@@ -471,10 +465,9 @@ class GSSD(BaseModel):
                 self.team_ratings_[team] = np.zeros(4)
 
     def get_team_ratings(self) -> pd.DataFrame:
-        """
-        Get team ratings as a DataFrame.
+        """Get team ratings as a DataFrame.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             DataFrame with team ratings and model coefficients
@@ -511,9 +504,6 @@ if __name__ == "__main__":
     )
     weights = dixon_coles_weights(train_df.datetime, xi=0.0018)
 
-    home_team = "Kolding"
-    away_team = "Sonderjyske"
-
     # Create and fit the model
     model = GSSD()
 
@@ -539,7 +529,5 @@ if __name__ == "__main__":
     print(f"Home win probability: {probs[0, 0]:.4f}")
     print(f"Draw probability: {probs[0, 1]:.4f}")
     print(f"Away win probability: {probs[0, 2]:.4f}")
-
-# %%
 
 # %%

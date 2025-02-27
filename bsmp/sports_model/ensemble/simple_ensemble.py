@@ -1,4 +1,6 @@
 # %%
+"""Simple ensemble model that combines predictions from multiple sports models using simple averaging."""
+
 from typing import Optional, Union
 
 import numpy as np
@@ -11,8 +13,7 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class SimpleEnsemble(BaseEnsemble):
-    """
-    Simple ensemble model that combines predictions from multiple sports models using simple averaging.
+    """Simple ensemble model that combines predictions from multiple sports models using simple averaging.
 
     This ensemble takes the arithmetic mean of predictions from all included models for both
     spread predictions and probability predictions.
@@ -25,8 +26,7 @@ class SimpleEnsemble(BaseEnsemble):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "SimpleEnsemble":
-        """
-        Fit all models in the ensemble.
+        """Fit all models in the ensemble.
 
         Args:
             X: DataFrame containing match data
@@ -55,7 +55,7 @@ class SimpleEnsemble(BaseEnsemble):
                 raise ValueError(f"Missing required columns in X: {missing_cols}")
 
             # Prepare data for each model based on its requirements
-            for name, model in self.models.items():
+            for _, model in self.models.items():
                 model.fit(X, y, Z, weights)
 
             self.is_fitted_ = True
@@ -71,8 +71,7 @@ class SimpleEnsemble(BaseEnsemble):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Generate ensemble spread predictions by averaging individual model predictions.
+        """Generate ensemble spread predictions by averaging individual model predictions.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -90,7 +89,7 @@ class SimpleEnsemble(BaseEnsemble):
 
         # Get predictions from all models
         predictions = []
-        for name, model in self.models.items():
+        for _, model in self.models.items():
             model_preds = model.predict(X, Z, point_spread=point_spread)
             predictions.append(model_preds)
 
@@ -106,8 +105,7 @@ class SimpleEnsemble(BaseEnsemble):
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Generate ensemble probability predictions by averaging individual model probabilities.
+        """Generate ensemble probability predictions by averaging individual model probabilities.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -128,7 +126,7 @@ class SimpleEnsemble(BaseEnsemble):
 
         # Get probability predictions from all models
         all_probas = []
-        for name, model in self.models.items():
+        for _, model in self.models.items():
             probas = model.predict_proba(
                 X,
                 Z,

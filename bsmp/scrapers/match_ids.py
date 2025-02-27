@@ -1,9 +1,11 @@
+"""This module contains the MatchIDScraper class for scraping match IDs from FlashScore."""
+
 import time
 from pathlib import Path
 from typing import List, Set
 
 import yaml
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 from selenium.common.exceptions import (
     ElementClickInterceptedException,
     TimeoutException,
@@ -28,8 +30,7 @@ class MatchIDScraper:
         config_path: Path = Path("config/flashscore_urls.yaml"),
         db_path: str = "database/database.db",
     ):
-        """
-        Initializes the MatchIDScraper with configuration and database paths.
+        """Initializes the MatchIDScraper with configuration and database paths.
 
         Parameters
         ----------
@@ -43,10 +44,9 @@ class MatchIDScraper:
         self._validate_paths()
 
     def _validate_paths(self) -> None:
-        """
-        Verify required files and directories exist.
+        """Verify required files and directories exist.
 
-        Raises
+        Raises:
         ------
         FileNotFoundError
             If the configuration file is missing.
@@ -56,10 +56,9 @@ class MatchIDScraper:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def _load_config(self) -> List[str]:
-        """
-        Load league URLs from YAML configuration.
+        """Load league URLs from YAML configuration.
 
-        Returns
+        Returns:
         -------
         List[str]
             List of league URLs to scrape.
@@ -76,8 +75,7 @@ class MatchIDScraper:
         return urls
 
     def _scroll_to_bottom(self, driver) -> None:
-        """
-        Scroll to page bottom to load more content.
+        """Scroll to page bottom to load more content.
 
         Parameters
         ----------
@@ -87,8 +85,7 @@ class MatchIDScraper:
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
 
     def _load_all_matches(self, driver) -> None:
-        """
-        Continuously load matches until no more are available.
+        """Continuously load matches until no more are available.
 
         Parameters
         ----------
@@ -108,8 +105,7 @@ class MatchIDScraper:
             pass
 
     def _extract_ids(self, browser: BrowserManager, url: str) -> Set[str]:
-        """
-        Extract unique match IDs from a league season page.
+        """Extract unique match IDs from a league season page.
 
         Parameters
         ----------
@@ -118,7 +114,7 @@ class MatchIDScraper:
         url : str
             The URL of the league season page.
 
-        Returns
+        Returns:
         -------
         Set[str]
             Set of unique match IDs.
@@ -127,18 +123,17 @@ class MatchIDScraper:
             self._load_all_matches(driver)
             soup = BeautifulSoup(driver.page_source, "html.parser")
 
+        matches = soup.find_all("div", class_="event__match--withRowLink")
         return {
-            element.get("id").split("_")[-1]
-            for element in soup.find_all(
-                "div", class_=lambda x: x and "event__match--withRowLink" in x
-            )
+            str(element.attrs["id"]).split("_")[-1]
+            for element in matches
+            if isinstance(element, Tag)
         }
 
     def _get_existing_ids(self) -> Set[str]:
-        """
-        Retrieve already stored match IDs from database.
+        """Retrieve already stored match IDs from database.
 
-        Returns
+        Returns:
         -------
         Set[str]
             Set of existing match IDs.
@@ -148,15 +143,14 @@ class MatchIDScraper:
             return {row[0] for row in cursor.fetchall()}
 
     def scrape(self, headless: bool = True) -> int:
-        """
-        Main scraping workflow.
+        """Main scraping workflow.
 
         Parameters
         ----------
         headless : bool, optional
             Whether to run the browser in headless mode. Defaults to True.
 
-        Returns
+        Returns:
         -------
         int
             Number of new match IDs scraped and stored.
@@ -183,4 +177,5 @@ class MatchIDScraper:
 
 
 if __name__ == "__main__":
-    pass
+    match_id_scraper = MatchIDScraper()
+    match_id_scraper.scrape()

@@ -1,20 +1,16 @@
+"""Base class for ensemble models."""
+
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
-from bsmp.sports_model.frequentist.bradley_terry_model import BradleyTerry
-from bsmp.sports_model.frequentist.gssd_model import GSSD
-from bsmp.sports_model.frequentist.poisson import Poisson
-from bsmp.sports_model.frequentist.prp_model import PRP
-from bsmp.sports_model.frequentist.toor_model import TOOR
-from bsmp.sports_model.frequentist.zsd_model import ZSD
+from bsmp.sports_model.frequentist import GSSD, PRP, TOOR, ZSD, BradleyTerry, Poisson
 
 
 class BaseEnsemble(ABC):
-    """
-    Abstract base class for ensemble models that combine predictions from multiple sports models.
+    """Abstract base class for ensemble models that combine predictions from multiple sports models.
 
     Attributes:
         models (Dict[str, Union[BradleyTerry, GSSD, PRP, TOOR, ZSD]]): Dictionary of model instances
@@ -34,8 +30,7 @@ class BaseEnsemble(ABC):
         self,
         model_names: List[str] = list(SUPPORTED_MODELS.keys()),
     ):
-        """
-        Initialize ensemble model.
+        """Initialize ensemble model.
 
         Args:
             model_names: List of model names to include
@@ -54,6 +49,7 @@ class BaseEnsemble(ABC):
         }
 
         self.is_fitted_ = False
+        self.team_map_ = {}
 
     @abstractmethod
     def fit(
@@ -63,8 +59,7 @@ class BaseEnsemble(ABC):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "BaseEnsemble":
-        """
-        Fit all models in the ensemble.
+        """Fit all models in the ensemble.
 
         Args:
             X: DataFrame containing match data
@@ -90,8 +85,7 @@ class BaseEnsemble(ABC):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Generate ensemble spread predictions.
+        """Generate ensemble spread predictions.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -115,8 +109,7 @@ class BaseEnsemble(ABC):
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Generate ensemble probability predictions.
+        """Generate ensemble probability predictions.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -135,8 +128,7 @@ class BaseEnsemble(ABC):
         pass
 
     def _validate_X(self, X: pd.DataFrame, fit: bool = True) -> None:
-        """
-        Validate input DataFrame dimensions and types.
+        """Validate input DataFrame dimensions and types.
 
         Parameters
         ----------
@@ -165,8 +157,7 @@ class BaseEnsemble(ABC):
                 raise ValueError(f"Column {i} must contain string values (team names)")
 
     def _check_is_fitted(self) -> None:
-        """
-        Validate that the model has been fitted.
+        """Validate that the model has been fitted.
 
         Raises:
             ValueError: If model hasn't been fitted

@@ -1,3 +1,5 @@
+"""This module contains the implementation of various frequentist models for sports betting."""
+
 from .bradley_terry_model import BradleyTerry
 from .gssd_model import GSSD
 from .poisson import Poisson

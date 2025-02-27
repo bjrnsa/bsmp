@@ -1,11 +1,13 @@
 # %%
+"""This file contains the implementation of the Poisson model for predicting games outcomes."""
+
 import warnings
 from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
+from scipy import stats
 from scipy.optimize import minimize
-from scipy.stats import norm, poisson
 from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
@@ -14,20 +16,17 @@ from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class Poisson(BaseModel):
-    """
-    Dixon and Coles adjusted Poisson model for predicting outcomes of football
-    (soccer) matches with scikit-learn-like API.
+    """Poisson model for predicting games outcomes.
 
     A probabilistic model that estimates team attack/defense strengths and predicts
-    match outcomes using maximum likelihood estimation with a Poisson distribution
-    and Dixon-Coles adjustment for low-scoring games.
+    match outcomes using maximum likelihood estimation with a Poisson distribution.
 
     Parameters
     ----------
     home_advantage : float, default=0.25
         Initial value for home advantage parameter
 
-    Attributes
+    Attributes:
     ----------
     teams_ : np.ndarray
         Unique team identifiers
@@ -39,14 +38,13 @@ class Poisson(BaseModel):
         Optimized model parameters after fitting
         [0:n_teams_] - Team attack ratings
         [n_teams_:2*n_teams_] - Team defense ratings
-        [-2] - Home advantage parameter
-        [-1] - Rho parameter
+        [-1] - Home advantage parameter
     """
 
-    NAME = "DC"
+    NAME = "Poisson"
 
     def __init__(self, home_advantage: float = 0.25) -> None:
-        """Initialize Dixon-Coles model."""
+        """Initialize Poisson model."""
         super().__init__()
         self.home_advantage_ = home_advantage
         self.is_fitted_ = False
@@ -58,8 +56,7 @@ class Poisson(BaseModel):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "Poisson":
-        """
-        Fit the Dixon-Coles model.
+        """Fit the Dixon-Coles model.
 
         Parameters
         ----------
@@ -75,7 +72,7 @@ class Poisson(BaseModel):
         weights : Optional[np.ndarray], default=None
             Weights for rating optimization
 
-        Returns
+        Returns:
         -------
         self : DixonColes
             Fitted model
@@ -91,21 +88,31 @@ class Poisson(BaseModel):
                 )
             if len(Z) != len(X):
                 raise ValueError("Z must have the same number of rows as X")
-            if Z.shape[1] != 2:
-                raise ValueError(
-                    "Z must have exactly 2 columns: home_goals and away_goals"
-                )
 
-            # Extract team data
+            # Extract team data (first two columns)
             self.home_team_ = X.iloc[:, 0].to_numpy()
             self.away_team_ = X.iloc[:, 1].to_numpy()
+
+            # Handle goal difference (y)
+            if y is not None:
+                self.goal_difference_ = np.asarray(y)
+            elif X.shape[1] >= 3:
+                self.goal_difference_ = X.iloc[:, 2].to_numpy()
+            else:
+                raise ValueError(
+                    "Either y or a third column in X with goal differences must be provided"
+                )
+
+            # Validate goal difference
+            if not np.issubdtype(self.goal_difference_.dtype, np.number):
+                raise ValueError("Goal differences must be numeric")
+
+            # Extract home_goals and away_goals from Z
             self.home_goals_ = Z.iloc[:, 0].to_numpy()
             self.away_goals_ = Z.iloc[:, 1].to_numpy()
 
             # Team setup
-            self.teams_ = np.sort(
-                np.unique(np.concatenate([self.home_team_, self.away_team_]))
-            )
+            self.teams_ = np.unique(np.concatenate([self.home_team_, self.away_team_]))
             self.n_teams_ = len(self.teams_)
             self.team_map_ = {team: idx for idx, team in enumerate(self.teams_)}
 
@@ -169,7 +176,7 @@ class Poisson(BaseModel):
                 away_attack = self.params_[away_idx]
                 home_defence = self.params_[home_idx + self.n_teams_]
                 away_defence = self.params_[away_idx + self.n_teams_]
-                home_advantage = self.params_[-2]
+                home_advantage = self.params_[-1]
 
                 # Calculate expected goals
                 home_goals = np.exp(home_advantage + home_attack + away_defence)
@@ -177,7 +184,7 @@ class Poisson(BaseModel):
                 predicted_spreads[i] = home_goals - away_goals
 
             # Calculate spread error
-            residuals = y - predicted_spreads
+            residuals = self.goal_difference_ - predicted_spreads
             sse = np.sum((residuals**2))
             self.spread_error_ = np.sqrt(sse / (len(X) - X.shape[1]))
 
@@ -194,8 +201,7 @@ class Poisson(BaseModel):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Predict point spreads for matches.
+        """Predict point spreads for matches.
 
         Parameters
         ----------
@@ -208,7 +214,7 @@ class Poisson(BaseModel):
         point_spread : float, default=0.0
             Point spread adjustment
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Predicted point spreads (goal differences)
@@ -250,8 +256,7 @@ class Poisson(BaseModel):
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Predict match outcome probabilities.
+        """Predict match outcome probabilities.
 
         Parameters
         ----------
@@ -268,7 +273,7 @@ class Poisson(BaseModel):
         outcome: Optional[str], default=None
             Outcome to predict (home_win, draw, away_win)
 
-        Returns
+        Returns:
         -------
         np.ndarray
             Array of shape (n_samples, n_classes) with probabilities
@@ -308,18 +313,17 @@ class Poisson(BaseModel):
 
             # Calculate spread
             predicted_spread = home_goals - away_goals
-
             # Calculate probabilities
             if include_draw:
                 thresholds = np.array([point_spread + 0.5, -point_spread - 0.5])
-                probs = norm.cdf(thresholds, predicted_spread, self.spread_error_)
+                probs = stats.norm.cdf(thresholds, predicted_spread, self.spread_error_)
                 prob_home, prob_draw, prob_away = (
                     1 - probs[0],
                     probs[0] - probs[1],
                     probs[1],
                 )
             else:
-                prob_home = 1 - norm.cdf(
+                prob_home = 1 - stats.norm.cdf(
                     point_spread, predicted_spread, self.spread_error_
                 )
                 prob_home, prob_away = prob_home, 1 - prob_home
@@ -336,16 +340,14 @@ class Poisson(BaseModel):
                     probabilities[i] = [prob_home, prob_draw, prob_away]
                 else:
                     probabilities[i] = [prob_home, prob_away]
-
         if outcome:
             return probabilities.reshape(-1)
         return probabilities
 
     def get_params(self) -> dict:
-        """
-        Get the current parameters of the model.
+        """Get the current parameters of the model.
 
-        Returns
+        Returns:
         -------
         dict
             Dictionary containing model parameters
@@ -360,8 +362,7 @@ class Poisson(BaseModel):
         }
 
     def set_params(self, params: dict) -> None:
-        """
-        Set parameters for the model.
+        """Set parameters for the model.
 
         Parameters
         ----------
@@ -375,10 +376,9 @@ class Poisson(BaseModel):
         self.home_advantage_ = params["home_advantage"]
 
     def get_team_ratings(self) -> pd.DataFrame:
-        """
-        Get team ratings as a DataFrame.
+        """Get team ratings as a DataFrame.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             DataFrame with team ratings
@@ -395,9 +395,8 @@ class Poisson(BaseModel):
 
         return ratings_df.round(3)
 
-    def _fit(self, params: np.ndarray) -> float:
-        """
-        Calculate negative log likelihood for parameter optimization.
+    def _fit(self, params: np.ndarray) -> np.float64:
+        """Calculate negative log likelihood for parameter optimization.
 
         Parameters
         ----------
@@ -408,7 +407,7 @@ class Poisson(BaseModel):
         teams : np.ndarray
             Unique team names
 
-        Returns
+        Returns:
         -------
         float
             Negative log likelihood
@@ -417,6 +416,7 @@ class Poisson(BaseModel):
         attack_ratings = params[: self.n_teams_]
         defense_ratings = params[self.n_teams_ : 2 * self.n_teams_]
         home_advantage = params[-1]
+        log_likelihood: np.float64 = np.float64(0.0)
 
         # Get team ratings for home and away teams
         home_attack = attack_ratings[self.home_idx_]
@@ -429,8 +429,8 @@ class Poisson(BaseModel):
         away_exp = np.exp(away_attack + home_defense)
 
         # Calculate log probabilities
-        home_llk = poisson.logpmf(self.home_goals_, home_exp)
-        away_llk = poisson.logpmf(self.away_goals_, away_exp)
+        home_llk = stats.poisson.logpmf(self.home_goals_, home_exp)
+        away_llk = stats.poisson.logpmf(self.away_goals_, away_exp)
 
         # Sum log likelihood with weights
         log_likelihood = np.sum(self.weights_ * (home_llk + away_llk))

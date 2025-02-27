@@ -1,8 +1,11 @@
+"""This module contains the OddsDataScraper class for scraping betting odds data from FlashScore."""
+
 import time
 from pathlib import Path
 from typing import Iterator, List, Tuple
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup, ResultSet, Tag
+from bs4.element import PageElement
 from tqdm import tqdm
 
 from bsmp.scrapers.core.browser import BrowserManager
@@ -17,8 +20,7 @@ class OddsDataScraper:
     DEFAULT_BATCH_SIZE = 100
 
     def __init__(self, db_path: str = "database/database.db", max_retries: int = 3):
-        """
-        Initializes the OddsDataScraper with database path and retry settings.
+        """Initializes the OddsDataScraper with database path and retry settings.
 
         Parameters
         ----------
@@ -32,10 +34,9 @@ class OddsDataScraper:
         self._validate_paths()
 
     def _validate_paths(self) -> None:
-        """
-        Ensure required filesystem resources exist.
+        """Ensure required filesystem resources exist.
 
-        Raises
+        Raises:
         ------
         FileNotFoundError
             If the database path does not exist.
@@ -43,16 +44,15 @@ class OddsDataScraper:
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
     def _fetch_pending_matches(self) -> Iterator[str]:
-        """
-        Generator for matches needing odds data collection.
+        """Generator for matches needing odds data collection.
 
-        Yields
+        Yields:
         ------
         str
             Match IDs that need odds data collection.
         """
         query = """
-        SELECT m.match_id 
+        SELECT m.match_id
         FROM handball_match_id m
         LEFT JOIN handball_odds_data o ON m.match_id = o.flashscore_id
         WHERE o.flashscore_id IS NULL
@@ -64,23 +64,28 @@ class OddsDataScraper:
                 yield row[0]
 
     def _parse_odds_row(self, odds_row: Tag) -> List[Tuple[str, float, float, float]]:
-        """
-        Extract bookmaker odds from odds row element.
+        """Extract bookmaker odds from odds row element.
 
         Parameters
         ----------
         odds_row : Tag
             BeautifulSoup Tag object containing the odds row.
 
-        Returns
+        Returns:
         -------
         List[Tuple[str, float, float, float]]
             List of tuples containing bookmaker name and odds values.
         """
         results = []
-        for bookmaker in odds_row.find_all(class_="oddsRowContent"):
+        odds_contents = odds_row.find_all(class_="oddsRowContent")
+        for bookmaker in odds_contents:
             try:
-                name = bookmaker.find("img")["alt"]
+                if not isinstance(bookmaker, Tag):
+                    continue
+                img = bookmaker.find("img")
+                if not isinstance(img, Tag):
+                    continue
+                name = img["alt"]
                 odds_values = [
                     self._parse_odd(el.text)
                     for el in bookmaker.find_all(class_="oddsValueInner")
@@ -95,15 +100,14 @@ class OddsDataScraper:
         return results
 
     def _parse_odd(self, value: str) -> float:
-        """
-        Safely convert odd value to float.
+        """Safely convert odd value to float.
 
         Parameters
         ----------
         value : str
             The odd value as a string.
 
-        Returns
+        Returns:
         -------
         float
             The odd value as a float.
@@ -116,8 +120,7 @@ class OddsDataScraper:
     def _process_match_odds(
         self, match_id: str, browser: BrowserManager
     ) -> List[Tuple]:
-        """
-        Scrape and parse odds data for a single match.
+        """Scrape and parse odds data for a single match.
 
         Parameters
         ----------
@@ -126,7 +129,7 @@ class OddsDataScraper:
         browser : BrowserManager
             The BrowserManager instance.
 
-        Returns
+        Returns:
         -------
         List[Tuple]
             List of tuples containing the odds data for the match.
@@ -140,6 +143,7 @@ class OddsDataScraper:
                 soup = BeautifulSoup(driver.page_source, "html.parser")
 
                 if odds_row := soup.find(class_="oddsRow"):
+                    assert isinstance(odds_row, Tag)
                     for bookmaker in self._parse_odds_row(odds_row):
                         records.append((match_id, *bookmaker))
 
@@ -151,8 +155,7 @@ class OddsDataScraper:
     def scrape(
         self, batch_size: int = DEFAULT_BATCH_SIZE, headless: bool = True
     ) -> None:
-        """
-        Orchestrate scraping workflow with progress tracking.
+        """Orchestrate scraping workflow with progress tracking.
 
         Parameters
         ----------
@@ -178,8 +181,7 @@ class OddsDataScraper:
                 self._store_batch(data_buffer)
 
     def _store_batch(self, records: List[Tuple]) -> None:
-        """
-        Batch insert records with transaction management.
+        """Batch insert records with transaction management.
 
         Parameters
         ----------
@@ -196,4 +198,5 @@ class OddsDataScraper:
 
 
 if __name__ == "__main__":
-    pass
+    odds_data_scraper = OddsDataScraper()
+    odds_data_scraper.scrape()

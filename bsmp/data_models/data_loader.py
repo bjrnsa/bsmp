@@ -1,4 +1,6 @@
 # %%
+"""This module contains the MatchDataLoader class for loading match data from a SQLite database."""
+
 import sqlite3
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
@@ -16,8 +18,7 @@ class MatchDataLoader:
         db_path: Union[str, Path] = "database/database.db",
         connection: Optional[sqlite3.Connection] = None,
     ):
-        """
-        Initialize data loader with configuration options.
+        """Initialize data loader with configuration options.
 
         Parameters
         ----------
@@ -37,15 +38,14 @@ class MatchDataLoader:
         self._validate_tables()
 
     def _create_connection(self) -> sqlite3.Connection:
-        """
-        Establish database connection with error handling.
+        """Establish database connection with error handling.
 
-        Returns
+        Returns:
         -------
         sqlite3.Connection
             The SQLite database connection.
 
-        Raises
+        Raises:
         ------
         FileNotFoundError
             If the database file does not exist.
@@ -55,10 +55,9 @@ class MatchDataLoader:
         return sqlite3.connect(self.db_path)
 
     def _validate_tables(self) -> None:
-        """
-        Verify required tables exist in the database.
+        """Verify required tables exist in the database.
 
-        Raises
+        Raises:
         ------
         ValueError
             If required tables are missing from the database.
@@ -74,12 +73,11 @@ class MatchDataLoader:
 
     def _get_current_teams(
         self,
-        league: str,
+        league: Optional[str] = None,
         seasons: Optional[List[str]] = None,
         filters: Optional[Dict[str, str]] = None,
     ) -> pd.Series:
-        """
-        Retrieve current teams with optional filters.
+        """Retrieve current teams with optional filters.
 
         Parameters
         ----------
@@ -90,18 +88,18 @@ class MatchDataLoader:
         filters : Optional[Dict[str, str]], optional
             Additional filter criteria. Defaults to None.
 
-        Returns
+        Returns:
         -------
         pd.Series
             Series of team names.
 
-        Raises
+        Raises:
         ------
         ValueError
             If no teams are found for the specified criteria.
         """
         base_query = f"""
-            SELECT team_name 
+            SELECT team_name
             FROM {self.sport}_current_clubs
             WHERE 1=1
         """
@@ -135,8 +133,7 @@ class MatchDataLoader:
         team_filters: Optional[Dict[str, str]] = None,
         result_mapping: Dict[str, int] = {"H": 1, "A": -1, "D": 0},
     ) -> pd.DataFrame:
-        """
-        Load match data with flexible filtering options.
+        """Load match data with flexible filtering options.
 
         Parameters
         ----------
@@ -151,12 +148,12 @@ class MatchDataLoader:
         result_mapping : Dict[str, int], optional
             Custom result value mapping. Defaults to {"H": 1, "A": -1, "D": 0}.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             Processed DataFrame of match data.
 
-        Raises
+        Raises:
         ------
         sqlite3.Error
             If there is a database error.
@@ -170,10 +167,10 @@ class MatchDataLoader:
             }
 
             query = f"""
-                SELECT 
+                SELECT
                     flashscore_id, season, match_info, datetime, league,
-                    home_team, away_team, 
-                    home_goals_full AS home_goals, 
+                    home_team, away_team,
+                    home_goals_full AS home_goals,
                     away_goals_full AS away_goals,
                     result
                 FROM {self.sport}_match_data
@@ -204,20 +201,19 @@ class MatchDataLoader:
             return pd.DataFrame()
 
     def load_odds(self, match_ids: List[int]) -> pd.DataFrame:
-        """
-        Load odds data for given match IDs.
+        """Load odds data for given match IDs.
 
         Parameters
         ----------
         match_ids : List[int]
             List of match IDs to load odds for.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             DataFrame containing odds data for the specified match IDs.
 
-        Raises
+        Raises:
         ------
         sqlite3.Error
             If there is a database error.
@@ -237,8 +233,7 @@ class MatchDataLoader:
     def _process_data(
         self, df: pd.DataFrame, result_mapping: Dict[str, int]
     ) -> pd.DataFrame:
-        """
-        Post-process dataframe with common transformations.
+        """Post-process dataframe with common transformations.
 
         Parameters
         ----------
@@ -247,7 +242,7 @@ class MatchDataLoader:
         result_mapping : Dict[str, int]
             Mapping of result values.
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             The processed DataFrame.
@@ -273,8 +268,7 @@ class MatchDataLoader:
         home_goals: str = "home_goals",
         away_goals: str = "away_goals",
     ) -> pd.DataFrame:
-        """
-        Add calculated features to dataframe.
+        """Add calculated features to dataframe.
 
         Parameters
         ----------
@@ -285,7 +279,7 @@ class MatchDataLoader:
         away_goals : str, optional
             Column name for away goals. Defaults to "away_goals".
 
-        Returns
+        Returns:
         -------
         pd.DataFrame
             The DataFrame with additional features.
@@ -296,16 +290,16 @@ class MatchDataLoader:
         )
 
     def close(self) -> None:
-        """
-        Close database connection.
-        """
+        """Close database connection."""
         if self.conn:
             self.conn.close()
 
     def __enter__(self):
+        """Enter context manager."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        """Exit context manager."""
         self.close()
 
 

@@ -1,11 +1,19 @@
 # %%
+"""This module contains the ImpliedOdds class for calculating implied probabilities from bookmaker odds."""
+
 import numpy as np
 import pandas as pd
 from scipy import optimize
+from sklearn.model_selection import train_test_split
+
+from bsmp.data_models.data_loader import MatchDataLoader
 
 
 class ImpliedOdds:
+    """Class for calculating implied probabilities from bookmaker odds."""
+
     def __init__(self):
+        """Initialize the ImpliedOdds class."""
         self.methods = {
             "multiplicative": self.multiplicative,
             "additive": self.additive,
@@ -16,7 +24,7 @@ class ImpliedOdds:
         }
 
     def process_odds(self, odds) -> pd.DataFrame:
-        """Process a single set of odds using all available methods"""
+        """Process a single set of odds using all available methods."""
         results = {}
         margins = {}
         for method_name, method_func in self.methods.items():
@@ -30,7 +38,7 @@ class ImpliedOdds:
         return pd.concat([df, margin_df], axis=1)
 
     def process_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Process multiple sets of odds from a DataFrame"""
+        """Process multiple sets of odds from a DataFrame."""
         if len(df.columns) != 3:
             raise ValueError("DataFrame must contain exactly three columns")
 
@@ -41,11 +49,11 @@ class ImpliedOdds:
         return results
 
     def get_implied_probabilities(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Get implied probabilities for multiple matches"""
+        """Get implied probabilities for multiple matches."""
         if len(df.columns) != 3:
             raise ValueError("DataFrame must contain exactly three columns")
 
-        outcomes = ["home", "draw", "away"]
+        outcomes = ["home_win", "draw", "away_win"]
         results = []
 
         for idx, row in df.iterrows():
@@ -64,14 +72,15 @@ class ImpliedOdds:
                         )
                 except Exception as e:
                     print(f"Error in {method_name} for {idx}: {e}")
+                    continue
 
         result_df = pd.DataFrame(results)
         return result_df.pivot(
             index=["match_id", "outcome"], columns="method", values="probability"
-        )
+        ).reset_index("outcome")
 
     def get_margins(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Get margins for multiple matches"""
+        """Get margins for multiple matches."""
         if len(df.columns) != 3:
             raise ValueError("DataFrame must contain exactly three columns")
 
@@ -80,13 +89,18 @@ class ImpliedOdds:
             odds = row.values
             match_margins = {"match_id": idx}
             for method_name, method_func in self.methods.items():
-                result = method_func(odds)
-                match_margins[method_name] = result["margin"]
+                try:
+                    result = method_func(odds)
+                    match_margins[method_name] = result["margin"]
+                except Exception as e:
+                    print(f"Error in {method_name} for {idx}: {e}")
+                    continue
             results.append(match_margins)
 
         return pd.DataFrame(results).set_index("match_id")
 
     def multiplicative(self, odds) -> dict:
+        """Calculate implied probabilities using multiplicative method."""
         odds = np.array(odds)
         inv_odds = 1.0 / odds
         normalized = inv_odds / np.sum(inv_odds)
@@ -98,6 +112,7 @@ class ImpliedOdds:
         }
 
     def additive(self, odds) -> dict:
+        """Calculate implied probabilities using additive method."""
         odds = np.array(odds)
         inv_odds = 1.0 / odds
         normalized = inv_odds + 1 / len(inv_odds) * (1 - np.sum(inv_odds))
@@ -109,6 +124,7 @@ class ImpliedOdds:
         }
 
     def power(self, odds) -> dict:
+        """Calculate implied probabilities using power method."""
         odds = np.array(odds)
         inv_odds = 1.0 / odds
         margin = np.sum(inv_odds) - 1
@@ -131,6 +147,7 @@ class ImpliedOdds:
         }
 
     def shin(self, odds) -> dict:
+        """Calculate implied probabilities using Shin method."""
         odds = np.array(odds)
         inv_odds = 1.0 / odds
         margin = np.sum(inv_odds) - 1
@@ -155,6 +172,7 @@ class ImpliedOdds:
         }
 
     def differential_margin_weighting(self, odds) -> dict:
+        """Calculate implied probabilities using differential margin weighting method."""
         odds = np.array(odds)
         inv_odds = 1.0 / odds
         margin = np.sum(inv_odds) - 1
@@ -167,6 +185,7 @@ class ImpliedOdds:
         }
 
     def odds_ratio(self, odds) -> dict:
+        """Calculate implied probabilities using odds ratio method."""
         odds = np.array(odds)
         inv_odds = 1.0 / odds
         margin = np.sum(inv_odds) - 1
@@ -191,15 +210,21 @@ class ImpliedOdds:
 
 # %%
 if __name__ == "__main__":
-    # Example usage
-    df = pd.DataFrame(
-        {"home": [2.7, 3.0], "draw": [2.3, 3.2], "away": [4.4, 2.8]},
-        index=["match1", "match2"],
+    loader = MatchDataLoader(sport="handball")
+    df = loader.load_matches(
+        league="Herre Handbold Ligaen",
+        seasons=["2024/2025"],
+    )
+    train_df, test_df = train_test_split(
+        df, test_size=0.2, random_state=42, shuffle=False
+    )
+    odds_df = (
+        loader.load_odds(df.index).groupby("flashscore_id").max().filter(regex="odds")
     )
 
     implied = ImpliedOdds()
-    probabilities = implied.get_implied_probabilities(df)
-    margins = implied.get_margins(df)
+    probabilities = implied.get_implied_probabilities(odds_df)
+    margins = implied.get_margins(odds_df)
 
     probabilities
     margins

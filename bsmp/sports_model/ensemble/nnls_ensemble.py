@@ -1,4 +1,6 @@
 # %%
+"""This file contains the implementation of the Non-Negative Least Squares (NNLS) ensemble model for predicting sports match outcomes."""
+
 from typing import List, Optional, Union
 
 import numpy as np
@@ -8,17 +10,12 @@ from sklearn.model_selection import train_test_split
 
 from bsmp.data_models.data_loader import MatchDataLoader
 from bsmp.sports_model.ensemble.base_ensemble import BaseEnsemble
-from bsmp.sports_model.frequentist.bradley_terry_model import BradleyTerry
-from bsmp.sports_model.frequentist.gssd_model import GSSD
-from bsmp.sports_model.frequentist.prp_model import PRP
-from bsmp.sports_model.frequentist.toor_model import TOOR
-from bsmp.sports_model.frequentist.zsd_model import ZSD
+from bsmp.sports_model.frequentist import GSSD, PRP, TOOR, ZSD, BradleyTerry, Poisson
 from bsmp.sports_model.utils import dixon_coles_weights
 
 
 class NNLS(BaseEnsemble):
-    """
-    NNLS ensemble model that combines predictions from multiple sports models.
+    """NNLS ensemble model that combines predictions from multiple sports models.
 
     The ensemble uses NNLS for spreads to create more robust predictions by learning
     optimal weights for each model's predictions.
@@ -35,14 +32,14 @@ class NNLS(BaseEnsemble):
         "prp": PRP,
         "toor": TOOR,
         "zsd": ZSD,
+        "poisson": Poisson,
     }
 
     def __init__(
         self,
         model_names: List[str] = list(SUPPORTED_MODELS.keys()),
     ):
-        """
-        Initialize ensemble model.
+        """Initialize ensemble model.
 
         Args:
             model_names: List of model names to include
@@ -51,7 +48,7 @@ class NNLS(BaseEnsemble):
             ValueError: If invalid model names are provided
         """
         super().__init__(model_names)
-        self.spread_ensemble_ = None
+        self.spread_ensemble_ = LinearRegression(positive=True, fit_intercept=True)
 
     def fit(
         self,
@@ -60,8 +57,7 @@ class NNLS(BaseEnsemble):
         Z: Optional[pd.DataFrame] = None,
         weights: Optional[np.ndarray] = None,
     ) -> "NNLS":
-        """
-        Fit all models in the ensemble and learn optimal weights.
+        """Fit all models in the ensemble and learn optimal weights.
 
         Args:
             X: DataFrame containing match data
@@ -84,13 +80,18 @@ class NNLS(BaseEnsemble):
             required_cols = ["home_team", "away_team"]
             if y is None:
                 required_cols.append("goal_difference")
+                y = X.iloc[:, 2].to_numpy()
+
+            assert isinstance(y, (np.ndarray, pd.Series)), (
+                "y must be a numpy array or pandas Series"
+            )
 
             missing_cols = [col for col in required_cols if col not in X.columns]
             if missing_cols:
                 raise ValueError(f"Missing required columns in X: {missing_cols}")
 
             # Prepare data for each model based on its requirements
-            for name, model in self.models.items():
+            for _, model in self.models.items():
                 model.fit(X, y, Z, weights)
 
             self.is_fitted_ = True
@@ -109,8 +110,7 @@ class NNLS(BaseEnsemble):
         Z: Optional[pd.DataFrame] = None,
         point_spread: float = 0.0,
     ) -> np.ndarray:
-        """
-        Generate ensemble spread predictions using learned weights.
+        """Generate ensemble spread predictions using learned weights.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -128,7 +128,7 @@ class NNLS(BaseEnsemble):
 
         # Get predictions from all models
         predictions = []
-        for name, model in self.models.items():
+        for _, model in self.models.items():
             model_preds = model.predict(X, Z, point_spread=point_spread)
             predictions.append(model_preds)
 
@@ -145,8 +145,7 @@ class NNLS(BaseEnsemble):
         include_draw: bool = True,
         outcome: Optional[str] = None,
     ) -> np.ndarray:
-        """
-        Generate ensemble probability predictions using simple averaging.
+        """Generate ensemble probability predictions using simple averaging.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -155,6 +154,7 @@ class NNLS(BaseEnsemble):
             include_draw: Whether to include draw probability
             outcome: Optional[str], default=None
                 Outcome to predict (home_win, draw, away_win)
+
         Returns:
             Array of probabilities [home_win_prob, draw_prob, away_win_prob]
 
@@ -166,7 +166,7 @@ class NNLS(BaseEnsemble):
 
         # Get probability predictions from all models
         all_probas = []
-        for name, model in self.models.items():
+        for _, model in self.models.items():
             probas = model.predict_proba(
                 X,
                 Z,
@@ -183,10 +183,12 @@ class NNLS(BaseEnsemble):
         return np.mean(stacked_probas, axis=2)
 
     def _fit_spread_ensemble(
-        self, X: pd.DataFrame, y: np.ndarray, Z: Optional[pd.DataFrame] = None
+        self,
+        X: pd.DataFrame,
+        y: Optional[Union[np.ndarray, pd.Series]] = None,
+        Z: Optional[pd.DataFrame] = None,
     ) -> "NNLS":
-        """
-        Fit NNLS ensemble for spread predictions.
+        """Fit NNLS ensemble for spread predictions.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -200,7 +202,7 @@ class NNLS(BaseEnsemble):
 
         # Get predictions from all models
         predictions = []
-        for name, model in self.models.items():
+        for _, model in self.models.items():
             model_preds = model.predict(X, Z)
             predictions.append(model_preds)
 
@@ -209,34 +211,10 @@ class NNLS(BaseEnsemble):
 
         # Fit NNLS ensemble
         self.spread_ensemble_ = LinearRegression(positive=True, fit_intercept=True)
-        self.spread_ensemble_.fit(predictions, y)
+        y_array = np.asarray(y)
+        self.spread_ensemble_.fit(predictions, y_array)
 
         return self
-
-    def get_model_spreads(
-        self, X: pd.DataFrame, Z: Optional[pd.DataFrame] = None
-    ) -> pd.DataFrame:
-        """
-        Get individual spread predictions from each model.
-
-        Args:
-            X: DataFrame containing match data with home_team and away_team columns
-            Z: Optional additional data (e.g., scores data)
-
-        Returns:
-            DataFrame with spread predictions from each model
-        """
-        self._check_is_fitted()
-
-        # Get predictions from all models
-        spreads = {}
-        for name, model in self.models.items():
-            spreads[name] = model.predict(X, Z)
-
-        spreads["ens"] = self.predict(X, Z, ensemble_method="simple_average")
-        spreads["nnls"] = self.predict(X, Z, ensemble_method="nnls")
-
-        return pd.DataFrame(spreads, index=X.index)
 
     def get_model_probabilities(
         self,
@@ -244,8 +222,7 @@ class NNLS(BaseEnsemble):
         Z: Optional[pd.DataFrame] = None,
         include_draw: bool = True,
     ) -> pd.DataFrame:
-        """
-        Get individual probability predictions from each model.
+        """Get individual probability predictions from each model.
 
         Args:
             X: DataFrame containing match data with home_team and away_team columns
@@ -284,15 +261,12 @@ class NNLS(BaseEnsemble):
         return result
 
     def get_ensemble_weights(self) -> pd.DataFrame:
-        """
-        Get the normalized (sum to one) weights used in the ensemble.
-
-        """
+        """Get the normalized (sum to one) weights used in the ensemble."""
         self._check_is_fitted()
 
-        return pd.DataFrame(self.spread_ensemble_.coef_, index=self.models.keys()).div(
-            self.spread_ensemble_.coef_.sum()
-        )
+        return pd.DataFrame(
+            self.spread_ensemble_.coef_, index=list(self.models.keys())
+        ).div(self.spread_ensemble_.coef_.sum())
 
 
 # %%

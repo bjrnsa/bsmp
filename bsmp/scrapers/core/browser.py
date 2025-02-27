@@ -1,3 +1,5 @@
+"""This module contains the BrowserManager class for managing the Selenium WebDriver."""
+
 from contextlib import contextmanager
 
 from selenium import webdriver
@@ -8,18 +10,16 @@ from selenium.webdriver.support.wait import WebDriverWait
 
 
 class BrowserManager:
-    """
-    Manages the Selenium WebDriver for browser automation.
+    """Manages the Selenium WebDriver for browser automation.
 
-    Attributes
+    Attributes:
     ----------
     options : selenium.webdriver.chrome.options.Options
         Chrome options for the WebDriver.
     """
 
     def __init__(self, headless=False):
-        """
-        Initializes the BrowserManager with optional headless mode.
+        """Initializes the BrowserManager with optional headless mode.
 
         Parameters
         ----------
@@ -33,16 +33,15 @@ class BrowserManager:
         self.options.add_argument("--disable-blink-features=AutomationControlled")
 
     @contextmanager
-    def get_driver(self, url: str = None):
-        """
-        Context manager that yields a WebDriver instance with optional initial navigation.
+    def get_driver(self, url: str | None = None):
+        """Context manager that yields a WebDriver instance with optional initial navigation.
 
         Parameters
         ----------
         url : str, optional
             The URL to navigate to after initializing the driver. Defaults to None.
 
-        Yields
+        Yields:
         ------
         selenium.webdriver.Chrome
             The Chrome WebDriver instance.
@@ -57,8 +56,7 @@ class BrowserManager:
             driver.quit()
 
     def _handle_cookies(self, driver):
-        """
-        Handles cookie consent banner after page load.
+        """Handles cookie consent banner after page load.
 
         Parameters
         ----------
